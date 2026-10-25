@@ -56,9 +56,68 @@ static int json_get_float(const char *json, const char *key, float *out) {
     return 1;
 }
 
+// Helper to escape strings for JSON formatting
+static void json_escape(const char *src, char *out, size_t out_max) {
+    size_t j = 0;
+    for (size_t i = 0; src && src[i] && j < out_max - 2; i++) {
+        char c = src[i];
+        if (c == '"') {
+            if (j + 2 >= out_max) break;
+            out[j++] = '\\';
+            out[j++] = '"';
+        } else if (c == '\\') {
+            if (j + 2 >= out_max) break;
+            out[j++] = '\\';
+            out[j++] = '\\';
+        } else if (c == '\n') {
+            if (j + 2 >= out_max) break;
+            out[j++] = '\\';
+            out[j++] = 'n';
+        } else if (c == '\r') {
+            if (j + 2 >= out_max) break;
+            out[j++] = '\\';
+            out[j++] = 'r';
+        } else if (c == '\t') {
+            if (j + 2 >= out_max) break;
+            out[j++] = '\\';
+            out[j++] = 't';
+        } else if ((unsigned char)c < 32) {
+            // omit unprintable control chars
+        } else {
+            out[j++] = c;
+        }
+    }
+    out[j] = '\0';
+}
+
+// Dispatched to GTK main loop thread for command response
+static void on_dispatch_cmd_response(struct webview *w, void *arg) {
+    char *json = (char *)arg;
+    if (json) {
+        char *script = NULL;
+        if (asprintf(&script, "window.__skred_on_command_response && window.__skred_on_command_response(%s);", json) != -1) {
+            webview_eval(w, script);
+            free(script);
+        }
+        free(json);
+    }
+}
+
+// Dispatched to GTK main loop thread for event batch
+static void on_dispatch_batch(struct webview *w, void *arg) {
+    char *json = (char *)arg;
+    if (json) {
+        char *script = NULL;
+        if (asprintf(&script, "window.__skred_dispatch_batch && window.__skred_dispatch_batch(%s);", json) != -1) {
+            webview_eval(w, script);
+            free(script);
+        }
+        free(json);
+    }
+}
+
 // JS -> C Callback
 static void on_webview_invoke(struct webview *w, const char *arg) {
-    (void)w;
     if (!arg || !*arg) return;
 
     char action[32] = {0};
@@ -72,6 +131,28 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
         char cmd[1024] = {0};
         if (json_get_string(arg, "text", cmd, sizeof(cmd))) {
             skred_command(cmd);
+        }
+    } else if (strcmp(action, "cmd_eval") == 0) {
+        char cmd[1024] = {0};
+        if (json_get_string(arg, "text", cmd, sizeof(cmd))) {
+            skred_logger(1);
+            int ret = skred_command(cmd);
+            char *log = skred_log();
+
+            char esc_cmd[1024];
+            json_escape(cmd, esc_cmd, sizeof(esc_cmd));
+
+            char esc_resp[8192];
+            if (log && *log) {
+                json_escape(log, esc_resp, sizeof(esc_resp));
+            } else {
+                snprintf(esc_resp, sizeof(esc_resp), "OK (return code: %d)", ret);
+            }
+
+            char *json = NULL;
+            if (asprintf(&json, "{\"cmd\":\"%s\",\"ret\":%d,\"response\":\"%s\"}", esc_cmd, ret, esc_resp) != -1) {
+                webview_dispatch(w, on_dispatch_cmd_response, json);
+            }
         }
     } else if (strcmp(action, "trig") == 0) {
         int voice = 0;
@@ -94,19 +175,6 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
     }
 }
 
-// Dispatched to GTK main loop thread
-static void on_dispatch_batch(struct webview *w, void *arg) {
-    char *json = (char *)arg;
-    if (json) {
-        char *script = NULL;
-        if (asprintf(&script, "window.__skred_dispatch_batch && window.__skred_dispatch_batch(%s);", json) != -1) {
-            webview_eval(w, script);
-            free(script);
-        }
-        free(json);
-    }
-}
-
 // Background thread polling Skred's control event ring buffer at 60 Hz
 static void *event_pump_thread(void *userdata) {
     struct webview *w = (struct webview *)userdata;
@@ -123,7 +191,7 @@ static void *event_pump_thread(void *userdata) {
 
         // Serialize event batch to JSON
         // Example: [{"t":1,"v":0,"p":-1,"s":-1,"id":0,"vals":[0.8,0.0,0.0]}, ...]
-        size_t buf_cap = (size_t)count * 96 + 16;
+        size_t buf_cap = (size_t)count * 128 + 32;
         char *json = (char *)malloc(buf_cap);
         if (!json) continue;
 
@@ -133,9 +201,9 @@ static void *event_pump_thread(void *userdata) {
         for (int i = 0; i < count; i++) {
             skred_control_event_t *e = &events[i];
             int written = snprintf(json + offset, buf_cap - offset,
-                "%s{\"t\":%u,\"v\":%d,\"p\":%d,\"s\":%d,\"id\":%d,\"vals\":[%.4f,%.4f,%.4f]}",
+                "%s{\"t\":%u,\"seq\":%llu,\"v\":%d,\"p\":%d,\"s\":%d,\"id\":%d,\"vals\":[%.4f,%.4f,%.4f]}",
                 (i > 0) ? "," : "",
-                e->type, e->voice, e->pattern, e->step, e->id,
+                e->type, (unsigned long long)e->sequence, e->voice, e->pattern, e->step, e->id,
                 e->value[0], e->value[1], e->value[2]);
             if (written > 0 && (size_t)written < buf_cap - offset) {
                 offset += (size_t)written;

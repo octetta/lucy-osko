@@ -41,3 +41,19 @@ pub fn decode_mixed_batch_test() {
     skred.VoiceTrigger(voice: 2, velocity: 0.6),
   ]
 }
+
+pub fn decode_control_plane_diagnostics_test() {
+  let json_payload =
+    "[{\"t\":4,\"seq\":142,\"v\":-1,\"p\":-1,\"s\":-1,\"id\":42,\"vals\":[10.0,20.0,30.0]}]"
+
+  let assert Ok(events) = json.parse(from: json_payload, using: skred.control_plane_decoder())
+  let assert [item] = events
+
+  assert item.event == skred.UserEvent(id: 42, a: 10.0, b: 20.0, c: 30.0)
+  assert item.info.type_name == "USER_EVENT"
+  assert item.info.seq == 142
+  assert item.info.id == 42
+  assert item.info.val0 == 10.0
+  assert item.info.val1 == 20.0
+  assert item.info.val2 == 30.0
+}

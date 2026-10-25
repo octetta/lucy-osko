@@ -14,9 +14,12 @@ The application solves the challenge of bridging a C audio engine's asynchronous
 - **100% Type-Safe Frontend**: Written in **Gleam 1.19** and **Lustre 5.7**.
 - **Hard Real-Time C Audio**: Driven by the **Skred 0.79** audio engine running stereo ALSA at 48 kHz.
 - **Lock-Free Event Bridge**: A dedicated C background thread drains Skred's control ring and dispatches 60 FPS event batches directly into Lustre's subscription loop.
+- **Interactive Skode REPL Console**: Text command input accepting any Skred command (`?q`, `/a?`, `v0 ?`, `ce 42...`, `puts`) with return code badges and formatted multi-line engine log responses.
+- **Real-Time Control Plane Event Inspector**: Live diagnostic table showing sequence numbers, event types (`VOICE_TRIGGER`, `PATTERN_STEP`, `USER_EVENT`, `TEMPO_CHANGE`), voices, patterns, steps, and numeric argument payloads with stream freeze/pause, filter, and emit controls.
 - **Interactive 16-Step Grid Sequencer**: 6 tracks (Kick, Snare, Closed Hat, Open Hat, 303 Bass, Lead Synth) with real-time animated playhead driven by `PatternStep` engine events.
 - **4x4 Velocity Performance Pads**: MPC-style pad grid with tactile feedback, responsive animations, and reactive flashes on `VoiceTrigger` notifications.
 - **Hardware Synth Controls**: Live faders for Filter Cutoff (Hz), Resonance (Q), and Master Output level.
+- **Multiple Workspace Layouts**: Switch seamlessly between **Studio**, **Control Plane**, **REPL Console**, and **Split Dashboard** views.
 - **Dual Runtime Modes**: Run as a **native desktop app** with the C host, or run in any standard web browser using the included **JS FFI mock driver** for fast UI design and tweaking.
 
 ---

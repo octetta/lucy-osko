@@ -1,5 +1,6 @@
 //// Lucy Osko: Community showcase for Gleam + Lustre running on a native C / webview.h host
-//// with hard real-time bidirectional FFI communication to the Skred audio synthesizer engine.
+//// with hard real-time bidirectional FFI communication to the Skred audio synthesizer engine,
+//// featuring interactive Skode REPL console and live Control Plane event inspector.
 
 import gleam/float
 import gleam/int
@@ -12,7 +13,9 @@ import lustre/effect.{type Effect}
 import lustre/element.{type Element}
 import lustre/element/html
 import lustre/event
-import skred.{type SkredEvent}
+import skred.{
+  type CommandResult, type ControlEventInfo, type ControlPlaneEvent,
+}
 
 // =============================================================================
 // MAIN ENTRYPOINT
@@ -27,6 +30,13 @@ pub fn main() {
 // =============================================================================
 // DATA TYPES
 // =============================================================================
+
+pub type ViewTab {
+  StudioTab
+  ControlPlaneTab
+  ConsoleTab
+  SplitTab
+}
 
 pub type Track {
   Track(
@@ -51,12 +61,17 @@ pub type Pad {
   )
 }
 
-pub type LogEntry {
-  LogEntry(time: String, desc: String, kind: String)
+pub type CommandHistoryEntry {
+  CommandHistoryEntry(
+    cmd: String,
+    ret: Int,
+    response: String,
+  )
 }
 
 pub type Model {
   Model(
+    active_tab: ViewTab,
     playing: Bool,
     current_step: Int,
     bpm: Float,
@@ -65,12 +80,19 @@ pub type Model {
     cutoff: Float,
     resonance: Float,
     volume: Float,
-    log: List(LogEntry),
+    // Console REPL state
+    command_input: String,
+    command_history: List(CommandHistoryEntry),
+    // Control Plane state
+    control_events: List(ControlEventInfo),
+    stream_paused: Bool,
+    event_filter: String,
     total_events: Int,
   )
 }
 
 pub type Msg {
+  SetTab(ViewTab)
   TogglePlay
   SetBpm(String)
   ToggleStep(track_idx: Int, step_idx: Int)
@@ -82,7 +104,17 @@ pub type Msg {
   SetVolume(String)
   LoadPreset(String)
   ClearAll
-  OnSkredEvents(List(SkredEvent))
+  // REPL Console messages
+  SetCommandInput(String)
+  SubmitCommand
+  RunQuickCommand(String)
+  OnCommandResult(CommandResult)
+  // Control Plane Inspector messages
+  ToggleStreamPause
+  ClearControlEvents
+  SetEventFilter(String)
+  EmitTestUserEvent
+  OnControlPlaneEvents(List(ControlPlaneEvent))
 }
 
 // =============================================================================
@@ -123,6 +155,7 @@ fn init(_) -> #(Model, Effect(Msg)) {
   ]
 
   let initial_model = Model(
+    active_tab: SplitTab,
     playing: False,
     current_step: 0,
     bpm: 124.0,
@@ -131,12 +164,25 @@ fn init(_) -> #(Model, Effect(Msg)) {
     cutoff: 750.0,
     resonance: 0.65,
     volume: 0.85,
-    log: [LogEntry("00:00", "Lustre TEA runtime initialized", "sys")],
+    command_input: "",
+    command_history: [
+      CommandHistoryEntry("?v", 0, "Skred 0.79.0 maxed - ALSA 48kHz audio initialized\n"),
+    ],
+    control_events: [],
+    stream_paused: False,
+    event_filter: "ALL",
     total_events: 0,
   )
 
-  // Start subscription to Skred C host events immediately
-  #(initial_model, skred.subscribe(OnSkredEvents))
+  // Start subscriptions to Skred C host events and command responses
+  #(
+    initial_model,
+    effect.batch([
+      skred.subscribe_control_plane(OnControlPlaneEvents),
+      skred.subscribe_command_responses(OnCommandResult),
+      skred.execute_command("/a?"),
+    ]),
+  )
 }
 
 fn get_at(items: List(a), index: Int) -> Result(a, Nil) {
@@ -183,13 +229,12 @@ fn empty_16_steps() -> List(Bool) {
 }
 
 // =============================================================================
-// PATTERN COMPILER (Elm Architecture -> Skode Engine Commands)
+// PATTERN COMPILER
 // =============================================================================
 
 fn compile_pattern(tracks: List(Track), bpm: Float) -> String {
   let header = "M " <> int.to_string(float.round(bpm)) <> " 16\ny0 yc1\n"
   
-  // Build step triggers
   let step_commands = range(0, 15)
     |> list.map(fn(step_idx) {
       let active_voices = tracks
@@ -218,6 +263,10 @@ fn compile_pattern(tracks: List(Track), bpm: Float) -> String {
 
 fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
+    SetTab(tab) -> {
+      #(Model(..model, active_tab: tab), effect.none())
+    }
+
     TogglePlay -> {
       case model.playing {
         True -> {
@@ -269,7 +318,6 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       let side_effect = case model.playing {
         True -> skred.command(compile_pattern(updated_tracks, model.bpm))
         False -> {
-          // Play preview of the triggered voice if turned on
           let track = get_at(updated_tracks, track_idx) |> result.unwrap(Track("", "", 0, "", [], False))
           let step_on = get_at(track.steps, step_idx) |> result.unwrap(False)
           case step_on {
@@ -390,32 +438,66 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       #(Model(..model, tracks: cleared_tracks), effect)
     }
 
-    OnSkredEvents(events) -> {
-      // Process incoming 60Hz event batch from C host
-      let #(new_step, triggered_voices, new_log) = list.fold(
-        over: events,
-        from: #(model.current_step, [], model.log),
-        with: fn(acc, evt) {
-          let #(cur_s, v_trigs, cur_log) = acc
-          case evt {
-            skred.PatternStep(_, s) -> {
-              #(s, v_trigs, [LogEntry("STEP", "Step " <> int.to_string(s), "seq"), ..cur_log])
-            }
-            skred.VoiceTrigger(v, _) -> {
-              #(cur_s, [v, ..v_trigs], [LogEntry("VOICE", "Trigger v" <> int.to_string(v), "voice"), ..cur_log])
-            }
-            skred.TempoChange(t) -> {
-              #(cur_s, v_trigs, [LogEntry("BPM", "Tempo " <> float.to_string(t), "tempo"), ..cur_log])
-            }
-            skred.UserEvent(id, a, _, _) -> {
-              #(cur_s, v_trigs, [LogEntry("USER", "UserEvent #" <> int.to_string(id) <> " a=" <> float.to_string(a), "user"), ..cur_log])
-            }
-            _ -> acc
-          }
-        },
-      )
+    // --- REPL Console ---
+    SetCommandInput(text) -> {
+      #(Model(..model, command_input: text), effect.none())
+    }
 
-      // Light up pads that received VoiceTrigger events
+    SubmitCommand -> {
+      let trimmed = string.trim(model.command_input)
+      case trimmed {
+        "" -> #(model, effect.none())
+        cmd -> #(
+          Model(..model, command_input: ""),
+          skred.execute_command(cmd),
+        )
+      }
+    }
+
+    RunQuickCommand(cmd) -> {
+      #(model, skred.execute_command(cmd))
+    }
+
+    OnCommandResult(res) -> {
+      let new_entry = CommandHistoryEntry(cmd: res.cmd, ret: res.ret, response: res.response)
+      let updated_history = [new_entry, ..model.command_history] |> list.take(50)
+      #(Model(..model, command_history: updated_history), effect.none())
+    }
+
+    // --- Control Plane Inspector ---
+    ToggleStreamPause -> {
+      #(Model(..model, stream_paused: !model.stream_paused), effect.none())
+    }
+
+    ClearControlEvents -> {
+      #(Model(..model, control_events: []), effect.none())
+    }
+
+    SetEventFilter(filter) -> {
+      #(Model(..model, event_filter: filter), effect.none())
+    }
+
+    EmitTestUserEvent -> {
+      #(model, skred.execute_command("ce 42, 100, 200, 300"))
+    }
+
+    OnControlPlaneEvents(events) -> {
+      // 1. Advance sequencer playhead on PatternStep
+      let new_step = list.fold(events, model.current_step, fn(step_acc, item) {
+        case item.event {
+          skred.PatternStep(_, s) -> s
+          _ -> step_acc
+        }
+      })
+
+      // 2. Collect triggered voices to light up pads
+      let triggered_voices = list.filter_map(events, fn(item) {
+        case item.event {
+          skred.VoiceTrigger(v, _) -> Ok(v)
+          _ -> Error(Nil)
+        }
+      })
+
       let updated_pads = case triggered_voices {
         [] -> model.pads
         _ -> model.pads
@@ -427,7 +509,15 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           })
       }
 
-      let trimmed_log = list.take(new_log, 8)
+      // 3. Update Control Plane diagnostic events buffer (if not paused)
+      let new_control_events = case model.stream_paused {
+        True -> model.control_events
+        False -> {
+          let incoming_infos = list.map(events, fn(e) { e.info })
+          list.append(incoming_infos, model.control_events) |> list.take(100)
+        }
+      }
+
       let new_total = model.total_events + list.length(events)
 
       #(
@@ -435,7 +525,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           ..model,
           current_step: new_step,
           pads: updated_pads,
-          log: trimmed_log,
+          control_events: new_control_events,
           total_events: new_total,
         ),
         effect.none(),
@@ -451,7 +541,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 fn view(model: Model) -> Element(Msg) {
   html.div([attribute.class("app-container")], [
     view_header(model),
-    view_main_layout(model),
+    view_main_workspace(model),
     view_footer(model),
   ])
 }
@@ -466,11 +556,48 @@ fn view_header(model: Model) -> Element(Msg) {
       ]),
     ]),
 
-    html.div([attribute.class("engine-status-pill")], [
-      html.span([attribute.class("status-led-pulse")], []),
-      html.span([attribute.class("status-text")], [
-        html.text("ALSA 48 kHz • 16 VOICES • 60 FPS DRAIN"),
-      ]),
+    // View Tabs Switcher
+    html.div([attribute.class("view-tab-pills")], [
+      html.button(
+        [
+          attribute.class(case model.active_tab {
+            StudioTab -> "tab-pill active"
+            _ -> "tab-pill"
+          }),
+          event.on_click(SetTab(StudioTab)),
+        ],
+        [html.text("🎛️ STUDIO")],
+      ),
+      html.button(
+        [
+          attribute.class(case model.active_tab {
+            ControlPlaneTab -> "tab-pill active"
+            _ -> "tab-pill"
+          }),
+          event.on_click(SetTab(ControlPlaneTab)),
+        ],
+        [html.text("⚡ CONTROL PLANE")],
+      ),
+      html.button(
+        [
+          attribute.class(case model.active_tab {
+            ConsoleTab -> "tab-pill active"
+            _ -> "tab-pill"
+          }),
+          event.on_click(SetTab(ConsoleTab)),
+        ],
+        [html.text("💻 SKRED REPL")],
+      ),
+      html.button(
+        [
+          attribute.class(case model.active_tab {
+            SplitTab -> "tab-pill active"
+            _ -> "tab-pill"
+          }),
+          event.on_click(SetTab(SplitTab)),
+        ],
+        [html.text("📊 SPLIT VIEW")],
+      ),
     ]),
 
     html.div([attribute.class("transport-controls")], [
@@ -523,9 +650,18 @@ fn view_header(model: Model) -> Element(Msg) {
   ])
 }
 
-fn view_main_layout(model: Model) -> Element(Msg) {
+fn view_main_workspace(model: Model) -> Element(Msg) {
+  case model.active_tab {
+    StudioTab -> view_studio_layout(model)
+    ControlPlaneTab -> view_control_plane_fullscreen(model)
+    ConsoleTab -> view_console_fullscreen(model)
+    SplitTab -> view_split_dashboard(model)
+  }
+}
+
+// 1. Studio layout (Sequencer + MPC Pads + Synth Controls)
+fn view_studio_layout(model: Model) -> Element(Msg) {
   html.div([attribute.class("content-grid")], [
-    // Left: 16-step grid sequencer
     html.section([attribute.class("panel sequencer-panel")], [
       html.div([attribute.class("panel-header")], [
         html.h2([], [html.text("16-STEP SEQUENCER")]),
@@ -536,7 +672,6 @@ fn view_main_layout(model: Model) -> Element(Msg) {
       view_sequencer_grid(model),
     ]),
 
-    // Right: MPC Pads & Synth Parameters
     html.div([attribute.class("sidebar-column")], [
       html.section([attribute.class("panel pads-panel")], [
         html.div([attribute.class("panel-header")], [
@@ -556,6 +691,71 @@ fn view_main_layout(model: Model) -> Element(Msg) {
     ]),
   ])
 }
+
+// 2. Control Plane Fullscreen Table
+fn view_control_plane_fullscreen(model: Model) -> Element(Msg) {
+  html.section([attribute.class("panel panel-full")], [
+    view_control_plane_header(model),
+    view_control_plane_table(model),
+  ])
+}
+
+// 3. REPL Console Fullscreen
+fn view_console_fullscreen(model: Model) -> Element(Msg) {
+  html.section([attribute.class("panel panel-full")], [
+    view_console_panel(model),
+  ])
+}
+
+// 4. Split Dashboard (Studio + Control Plane + Console together)
+fn view_split_dashboard(model: Model) -> Element(Msg) {
+  html.div([attribute.class("split-dashboard-grid")], [
+    // Top Left: 16-step sequencer
+    html.section([attribute.class("panel sequencer-panel")], [
+      html.div([attribute.class("panel-header")], [
+        html.h2([], [html.text("16-STEP SEQUENCER")]),
+        html.div([attribute.class("step-counter")], [
+          html.text("STEP " <> int.to_string(model.current_step + 1) <> " / 16"),
+        ]),
+      ]),
+      view_sequencer_grid(model),
+    ]),
+
+    // Top Right: Pads & Synth
+    html.div([attribute.class("sidebar-column")], [
+      html.section([attribute.class("panel pads-panel")], [
+        html.div([attribute.class("panel-header")], [
+          html.h2([], [html.text("PERFORMANCE PADS")]),
+          html.span([attribute.class("badge")], [html.text("4x4 VELOCITY")]),
+        ]),
+        view_pad_grid(model),
+      ]),
+
+      html.section([attribute.class("panel synth-panel")], [
+        html.div([attribute.class("panel-header")], [
+          html.h2([], [html.text("SYNTH PARAMETERS")]),
+          html.span([attribute.class("badge")], [html.text("OPCODES")]),
+        ]),
+        view_synth_deck(model),
+      ]),
+    ]),
+
+    // Bottom Left: Live Control Plane Inspector Table
+    html.section([attribute.class("panel control-plane-panel")], [
+      view_control_plane_header(model),
+      view_control_plane_table(model),
+    ]),
+
+    // Bottom Right: Skred REPL Terminal
+    html.section([attribute.class("panel repl-panel")], [
+      view_console_panel(model),
+    ]),
+  ])
+}
+
+// =============================================================================
+// SEQUENCER & PADS COMPONENTS
+// =============================================================================
 
 fn view_sequencer_grid(model: Model) -> Element(Msg) {
   html.div([attribute.class("grid-container")], [
@@ -720,17 +920,248 @@ fn view_synth_deck(model: Model) -> Element(Msg) {
   ])
 }
 
+// =============================================================================
+// CONTROL PLANE EVENTS INSPECTOR
+// =============================================================================
+
+fn view_control_plane_header(model: Model) -> Element(Msg) {
+  html.div([attribute.class("panel-header")], [
+    html.div([attribute.class("header-left")], [
+      html.h2([], [html.text("CONTROL PLANE EVENTS")]),
+      html.span([attribute.class("badge-stream")], [
+        html.text("60 FPS DRAIN • " <> int.to_string(list.length(model.control_events)) <> " BUFFERED"),
+      ]),
+    ]),
+
+    html.div([attribute.class("header-actions")], [
+      // Filter buttons
+      html.div([attribute.class("filter-pill-group")], [
+        html.button(
+          [
+            attribute.class(case model.event_filter == "ALL" {
+              True -> "filter-btn active"
+              False -> "filter-btn"
+            }),
+            event.on_click(SetEventFilter("ALL")),
+          ],
+          [html.text("ALL")],
+        ),
+        html.button(
+          [
+            attribute.class(case model.event_filter == "VOICE" {
+              True -> "filter-btn active"
+              False -> "filter-btn"
+            }),
+            event.on_click(SetEventFilter("VOICE")),
+          ],
+          [html.text("VOICE")],
+        ),
+        html.button(
+          [
+            attribute.class(case model.event_filter == "STEP" {
+              True -> "filter-btn active"
+              False -> "filter-btn"
+            }),
+            event.on_click(SetEventFilter("STEP")),
+          ],
+          [html.text("STEP")],
+        ),
+        html.button(
+          [
+            attribute.class(case model.event_filter == "USER" {
+              True -> "filter-btn active"
+              False -> "filter-btn"
+            }),
+            event.on_click(SetEventFilter("USER")),
+          ],
+          [html.text("USER")],
+        ),
+      ]),
+
+      // Actions
+      html.button(
+        [
+          attribute.class(case model.stream_paused {
+            True -> "btn btn-sm btn-warn"
+            False -> "btn btn-sm"
+          }),
+          event.on_click(ToggleStreamPause),
+        ],
+        [
+          html.text(case model.stream_paused {
+            True -> "▶ RESUME"
+            False -> "⏸ PAUSE"
+          }),
+        ],
+      ),
+
+      html.button(
+        [attribute.class("btn btn-sm"), event.on_click(EmitTestUserEvent)],
+        [html.text("EMIT ce 42")],
+      ),
+
+      html.button(
+        [attribute.class("btn btn-sm btn-clear"), event.on_click(ClearControlEvents)],
+        [html.text("CLEAR")],
+      ),
+    ]),
+  ])
+}
+
+fn view_control_plane_table(model: Model) -> Element(Msg) {
+  let filtered_events = model.control_events
+    |> list.filter(fn(info) {
+      case model.event_filter {
+        "VOICE" -> string.contains(info.type_name, "VOICE")
+        "STEP" -> string.contains(info.type_name, "PATTERN")
+        "USER" -> string.contains(info.type_name, "USER")
+        _ -> True
+      }
+    })
+
+  html.div([attribute.class("events-table-wrapper")], [
+    html.table([attribute.class("events-table")], [
+      html.thead([], [
+        html.tr([], [
+          html.th([], [html.text("SEQ")]),
+          html.th([], [html.text("EVENT TYPE")]),
+          html.th([], [html.text("VOICE")]),
+          html.th([], [html.text("PAT : STEP")]),
+          html.th([], [html.text("ID")]),
+          html.th([], [html.text("VAL 0")]),
+          html.th([], [html.text("VAL 1")]),
+          html.th([], [html.text("VAL 2")]),
+        ]),
+      ]),
+      html.tbody([], {
+        case filtered_events {
+          [] -> [
+            html.tr([attribute.class("empty-row")], [
+              html.td([attribute.attribute("colspan", "8")], [
+                html.text("No control plane events in buffer. Start playback or tap pads to see events."),
+              ]),
+            ]),
+          ]
+          _ -> list.map(filtered_events, fn(info) {
+            html.tr([attribute.class("event-row")], [
+              html.td([attribute.class("cell-seq")], [html.text("#" <> int.to_string(info.seq))]),
+              html.td([], [
+                html.span(
+                  [
+                    attribute.class("type-pill"),
+                    attribute.style("--type-color", info.color),
+                  ],
+                  [html.text(info.type_name)],
+                ),
+              ]),
+              html.td([], [
+                html.text(case info.voice >= 0 {
+                  True -> "v" <> int.to_string(info.voice)
+                  False -> "-"
+                }),
+              ]),
+              html.td([], [
+                html.text(case info.pattern >= 0 || info.step >= 0 {
+                  True -> "p" <> int.to_string(info.pattern) <> " : s" <> int.to_string(info.step)
+                  False -> "-"
+                }),
+              ]),
+              html.td([], [
+                html.text(case info.id != 0 {
+                  True -> int.to_string(info.id)
+                  False -> "-"
+                }),
+              ]),
+              html.td([attribute.class("cell-num")], [html.text(float.to_string(info.val0))]),
+              html.td([attribute.class("cell-num")], [html.text(float.to_string(info.val1))]),
+              html.td([attribute.class("cell-num")], [html.text(float.to_string(info.val2))]),
+            ])
+          })
+        }
+      }),
+    ]),
+  ])
+}
+
+// =============================================================================
+// REPL CONSOLE COMPONENT
+// =============================================================================
+
+fn view_console_panel(model: Model) -> Element(Msg) {
+  html.div([attribute.class("console-container")], [
+    html.div([attribute.class("panel-header")], [
+      html.div([attribute.class("header-left")], [
+        html.h2([], [html.text("SKRED / SKODE REPL CONSOLE")]),
+        html.span([attribute.class("badge-stream")], [html.text("ASCII PROTOCOL FFI")]),
+      ]),
+
+      html.div([attribute.class("quick-queries")], [
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("/a?"))], [html.text("/a? Audio")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?q"))], [html.text("?q Queue")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?ce"))], [html.text("?ce Events")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("v0 ?"))], [html.text("v0 ? State")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?m"))], [html.text("?m Macros")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("[hello from gleam] puts"))], [html.text("puts")]),
+      ]),
+    ]),
+
+    // Terminal History Output
+    html.div([attribute.class("terminal-output")], {
+      list.map(model.command_history, fn(item) {
+        html.div([attribute.class("history-block")], [
+          html.div([attribute.class("history-cmd-line")], [
+            html.span([attribute.class("prompt-symbol")], [html.text(">")]),
+            html.span([attribute.class("prompt-cmd")], [html.text(item.cmd)]),
+            html.span(
+              [
+                attribute.class(case item.ret == 0 {
+                  True -> "ret-badge ok"
+                  False -> "ret-badge err"
+                }),
+              ],
+              [html.text("ret " <> int.to_string(item.ret))],
+            ),
+          ]),
+          html.pre([attribute.class("history-response")], [
+            html.text(case item.response {
+              "" -> "(empty response)\n"
+              resp -> resp
+            }),
+          ]),
+        ])
+      })
+    }),
+
+    // Command Input Bar
+    html.div([attribute.class("command-input-bar")], [
+      html.span([attribute.class("input-prompt")], [html.text(">")]),
+      html.input([
+        attribute.class("cmd-input-field"),
+        attribute.type_("text"),
+        attribute.placeholder("Enter Skode command (e.g. ?q, /a?, v0 ?, [test] puts, ce 42, 1, 2, 3)..."),
+        attribute.value(model.command_input),
+        event.on_input(SetCommandInput),
+      ]),
+      html.button(
+        [attribute.class("btn btn-exec"), event.on_click(SubmitCommand)],
+        [html.text("EXECUTE")],
+      ),
+    ]),
+  ])
+}
+
+// =============================================================================
+// FOOTER
+// =============================================================================
+
 fn view_footer(model: Model) -> Element(Msg) {
   html.footer([attribute.class("bottom-bar")], [
     html.div([attribute.class("telemetry-feed")], [
-      html.span([attribute.class("telemetry-title")], [html.text("FFI TELEMETRY:")]),
-      html.div([attribute.class("log-pill-container")], {
-        list.map(model.log, fn(entry) {
-          html.span([attribute.class("log-pill log-" <> entry.kind)], [
-            html.text("[" <> entry.time <> "] " <> entry.desc),
-          ])
-        })
-      }),
+      html.span([attribute.class("status-led-pulse")], []),
+      html.span([attribute.class("telemetry-title")], [html.text("SKRED ENGINE 0.79:")]),
+      html.span([attribute.class("status-text")], [
+        html.text("ALSA 48 kHz • 16 VOICES • 60 FPS EVENT DRAIN • BUFFERED: " <> int.to_string(list.length(model.control_events))),
+      ]),
     ]),
 
     html.div([attribute.class("stats-summary")], [

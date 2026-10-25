@@ -34,19 +34,54 @@ pub type SkredEvent {
   OtherEvent(type_id: Int)
 }
 
+/// Rich metadata for real-time control plane inspection and diagnostics
+pub type ControlEventInfo {
+  ControlEventInfo(
+    type_id: Int,
+    type_name: String,
+    seq: Int,
+    voice: Int,
+    pattern: Int,
+    step: Int,
+    id: Int,
+    val0: Float,
+    val1: Float,
+    val2: Float,
+    color: String,
+  )
+}
+
+/// A decoded control plane event pairing high-level domain event with raw inspection data
+pub type ControlPlaneEvent {
+  ControlPlaneEvent(
+    event: SkredEvent,
+    info: ControlEventInfo,
+  )
+}
+
+/// Result of evaluating an ASCII Skode/Skred command on the engine
+pub type CommandResult {
+  CommandResult(
+    cmd: String,
+    ret: Int,
+    response: String,
+  )
+}
+
 // Internal raw JSON event format received from the C host
 type RawEvent {
-  RawEvent(t: Int, v: Int, p: Int, s: Int, id: Int, vals: List(Float))
+  RawEvent(t: Int, seq: Int, v: Int, p: Int, s: Int, id: Int, vals: List(Float))
 }
 
 fn raw_event_decoder() -> decode.Decoder(RawEvent) {
   use t <- decode.field("t", decode.int)
+  use seq <- decode.optional_field("seq", 0, decode.int)
   use v <- decode.field("v", decode.int)
   use p <- decode.field("p", decode.int)
   use s <- decode.field("s", decode.int)
   use id <- decode.field("id", decode.int)
   use vals <- decode.field("vals", decode.list(decode.float))
-  decode.success(RawEvent(t:, v:, p:, s:, id:, vals:))
+  decode.success(RawEvent(t:, seq:, v:, p:, s:, id:, vals:))
 }
 
 fn to_skred_event(raw: RawEvent) -> SkredEvent {
@@ -90,6 +125,42 @@ fn to_skred_event(raw: RawEvent) -> SkredEvent {
   }
 }
 
+fn to_control_event_info(raw: RawEvent) -> ControlEventInfo {
+  let #(type_name, color) = case raw.t {
+    1 -> #("VOICE_TRIGGER", "#ff3366")
+    2 -> #("VOICE_RELEASE", "#00e5ff")
+    3 -> #("VOICE_FINISHED", "#7f8fa4")
+    4 -> #("USER_EVENT", "#cc00ff")
+    5 -> #("PATTERN_START", "#ff9900")
+    6 -> #("PATTERN_END", "#ffaa00")
+    9 -> #("PATTERN_STEP", "#00ff88")
+    11 -> #("TEMPO_CHANGE", "#ffea00")
+    13 -> #("MUTE_CHANGE", "#ff5577")
+    other -> #("EVENT_" <> int.to_string(other), "#8899aa")
+  }
+
+  let #(v0, v1, v2) = case raw.vals {
+    [x, y, z, ..] -> #(x, y, z)
+    [x, y] -> #(x, y, 0.0)
+    [x] -> #(x, 0.0, 0.0)
+    [] -> #(0.0, 0.0, 0.0)
+  }
+
+  ControlEventInfo(
+    type_id: raw.t,
+    type_name: type_name,
+    seq: raw.seq,
+    voice: raw.v,
+    pattern: raw.p,
+    step: raw.s,
+    id: raw.id,
+    val0: v0,
+    val1: v1,
+    val2: v2,
+    color: color,
+  )
+}
+
 // --- Subscriptions & Decoders ---
 
 /// Decoder for a list of SkredEvents from dynamic data or JSON.
@@ -98,19 +169,68 @@ pub fn decoder() -> decode.Decoder(List(SkredEvent)) {
   |> decode.map(fn(raw_list) { list.map(raw_list, to_skred_event) })
 }
 
-/// Decodes a raw dynamic JSON array of events received from the C host.
+/// Decodes a raw dynamic JSON array of events into high-level SkredEvents.
 pub fn decode_events(dynamic_array: Dynamic) -> Result(List(SkredEvent), List(decode.DecodeError)) {
   decode.run(dynamic_array, decoder())
 }
 
-/// Subscribes to the C host's 60Hz batched event stream.
-/// When events are pumped from Skred, the batch is decoded and delivered
-/// as `msg` to your Lustre `update` function.
+/// Decoder for a list of rich ControlPlaneEvents pairing domain events with diagnostic metadata.
+pub fn control_plane_decoder() -> decode.Decoder(List(ControlPlaneEvent)) {
+  decode.list(raw_event_decoder())
+  |> decode.map(fn(raw_list) {
+    list.map(raw_list, fn(raw) {
+      ControlPlaneEvent(
+        event: to_skred_event(raw),
+        info: to_control_event_info(raw),
+      )
+    })
+  })
+}
+
+/// Decodes a dynamic array into a list of ControlPlaneEvents.
+pub fn decode_control_plane_events(dynamic_array: Dynamic) -> Result(List(ControlPlaneEvent), List(decode.DecodeError)) {
+  decode.run(dynamic_array, control_plane_decoder())
+}
+
+/// Subscribes to the C host's 60Hz batched event stream with full control plane diagnostics.
+pub fn subscribe_control_plane(on_batch: fn(List(ControlPlaneEvent)) -> msg) -> Effect(msg) {
+  effect.from(fn(dispatch) {
+    ffi_subscribe_events(fn(dynamic_array) {
+      case decode_control_plane_events(dynamic_array) {
+        Ok(events) -> dispatch(on_batch(events))
+        Error(_) -> Nil
+      }
+    })
+    Nil
+  })
+}
+
+/// Subscribes to the C host's 60Hz batched event stream with domain events.
 pub fn subscribe(on_batch: fn(List(SkredEvent)) -> msg) -> Effect(msg) {
   effect.from(fn(dispatch) {
     ffi_subscribe_events(fn(dynamic_array) {
       case decode_events(dynamic_array) {
         Ok(events) -> dispatch(on_batch(events))
+        Error(_) -> Nil
+      }
+    })
+    Nil
+  })
+}
+
+fn command_result_decoder() -> decode.Decoder(CommandResult) {
+  use cmd <- decode.field("cmd", decode.string)
+  use ret <- decode.field("ret", decode.int)
+  use response <- decode.field("response", decode.string)
+  decode.success(CommandResult(cmd:, ret:, response:))
+}
+
+/// Subscribes to responses from interactive command evaluations.
+pub fn subscribe_command_responses(on_response: fn(CommandResult) -> msg) -> Effect(msg) {
+  effect.from(fn(dispatch) {
+    ffi_subscribe_command_responses(fn(dynamic_obj) {
+      case decode.run(dynamic_obj, command_result_decoder()) {
+        Ok(res) -> dispatch(on_response(res))
         Error(_) -> Nil
       }
     })
@@ -146,7 +266,7 @@ pub fn release(voice: Int) -> Effect(msg) {
 
 // --- Commands & Opcode Control ---
 
-/// Sends an arbitrary Skode command string directly to the synthesizer.
+/// Sends an arbitrary Skode command string directly to the synthesizer (fire and forget).
 pub fn command(cmd: String) -> Effect(msg) {
   effect.from(fn(_) {
     ffi_send_command(cmd)
@@ -154,14 +274,22 @@ pub fn command(cmd: String) -> Effect(msg) {
   })
 }
 
+/// Evaluates a Skode command and delivers the text response back via `subscribe_command_responses`.
+pub fn execute_command(cmd: String) -> Effect(msg) {
+  effect.from(fn(_) {
+    ffi_send_command_eval(cmd)
+    Nil
+  })
+}
+
 /// Plays a specific pattern.
 pub fn play_pattern(pattern: Int) -> Effect(msg) {
-  command("yp " <> int.to_string(pattern))
+  command("y" <> int.to_string(pattern) <> " z1")
 }
 
 /// Stops a specific pattern.
 pub fn stop_pattern(pattern: Int) -> Effect(msg) {
-  command("ys " <> int.to_string(pattern))
+  command("y" <> int.to_string(pattern) <> " z0")
 }
 
 /// Stops all patterns and notes.
@@ -194,8 +322,14 @@ pub fn set_volume(voice: Int, volume: Float) -> Effect(msg) {
 @external(javascript, "./skred_ffi.mjs", "subscribe_events")
 fn ffi_subscribe_events(on_batch: fn(Dynamic) -> Nil) -> fn() -> Nil
 
+@external(javascript, "./skred_ffi.mjs", "subscribe_command_responses")
+fn ffi_subscribe_command_responses(on_response: fn(Dynamic) -> Nil) -> fn() -> Nil
+
 @external(javascript, "./skred_ffi.mjs", "send_command")
 fn ffi_send_command(cmd: String) -> Nil
+
+@external(javascript, "./skred_ffi.mjs", "send_command_eval")
+fn ffi_send_command_eval(cmd: String) -> Nil
 
 @external(javascript, "./skred_ffi.mjs", "send_trigger")
 fn ffi_send_trigger(voice: Int, velocity: Float) -> Nil
