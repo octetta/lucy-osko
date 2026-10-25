@@ -129,11 +129,21 @@ pub type Msg {
 fn init(_) -> #(Model, Effect(Msg)) {
   let default_tracks = [
     Track(name: "Kick 909", icon: "🥁", voice: 0, color: "#ff3366", steps: preset_four_on_floor(), muted: False),
+    Track(name: "Kick Tight", icon: "🥊", voice: 1, color: "#ff5577", steps: empty_16_steps(), muted: False),
     Track(name: "Snare 909", icon: "💥", voice: 2, color: "#ff9900", steps: preset_backbeat(), muted: False),
+    Track(name: "Clap 909", icon: "👏", voice: 3, color: "#ffaa22", steps: empty_16_steps(), muted: False),
     Track(name: "Closed Hat", icon: "⚡", voice: 4, color: "#ffea00", steps: preset_eighths(), muted: False),
     Track(name: "Open Hat", icon: "✨", voice: 5, color: "#00e5ff", steps: preset_offbeats(), muted: False),
-    Track(name: "Bass 303", icon: "🎸", voice: 8, color: "#00ff88", steps: preset_bassline(), muted: False),
-    Track(name: "Synth Lead", icon: "🎹", voice: 12, color: "#cc00ff", steps: preset_leadline(), muted: False),
+    Track(name: "Hat Roll", icon: "💫", voice: 6, color: "#ffee55", steps: empty_16_steps(), muted: False),
+    Track(name: "Rimshot", icon: "🥢", voice: 7, color: "#ff8844", steps: empty_16_steps(), muted: False),
+    Track(name: "Bass C2", icon: "🎸", voice: 8, color: "#00ff88", steps: preset_bassline(), muted: False),
+    Track(name: "Bass E2", icon: "🎸", voice: 9, color: "#00dd77", steps: empty_16_steps(), muted: False),
+    Track(name: "Bass G2", icon: "🎸", voice: 10, color: "#00bb66", steps: empty_16_steps(), muted: False),
+    Track(name: "Bass A2", icon: "🎸", voice: 11, color: "#009955", steps: empty_16_steps(), muted: False),
+    Track(name: "Lead C4", icon: "🎹", voice: 12, color: "#cc00ff", steps: preset_leadline(), muted: False),
+    Track(name: "Lead E4", icon: "🎹", voice: 13, color: "#aa00dd", steps: empty_16_steps(), muted: False),
+    Track(name: "Lead G4", icon: "🎹", voice: 14, color: "#8800bb", steps: empty_16_steps(), muted: False),
+    Track(name: "Lead B4", icon: "🎹", voice: 15, color: "#660099", steps: empty_16_steps(), muted: False),
   ]
 
   let default_pads = [
@@ -192,15 +202,15 @@ fn init(_) -> #(Model, Effect(Msg)) {
   )
 
   // Start subscriptions to Skred C host events and command responses,
-  // and immediately compile and populate pattern y0 in Skred!
-  let initial_pattern = compile_pattern(default_tracks, 124.0)
+  // and compile all 16 sound patterns (y0-y15) in Skred!
+  let initial_patterns = compile_all_patterns(default_tracks, 124.0)
   #(
     initial_model,
     effect.batch([
       skred.subscribe_control_plane(OnControlPlaneEvents),
       skred.subscribe_command_responses(OnCommandResult),
-      skred.command(initial_pattern),
-      skred.execute_command("z?"),
+      skred.command(initial_patterns),
+      skred.execute_command("Z?"),
     ]),
   )
 }
@@ -252,29 +262,50 @@ fn empty_16_steps() -> List(Bool) {
 // PATTERN COMPILER
 // =============================================================================
 
-fn compile_pattern(tracks: List(Track), bpm: Float) -> String {
-  let header = "M " <> int.to_string(float.round(bpm)) <> " 16\ny0 yc1\n"
-  
-  let step_commands = range(0, 15)
-    |> list.map(fn(step_idx) {
-      let active_voices = tracks
-        |> list.filter_map(fn(t) {
-          let is_step_on = get_at(t.steps, step_idx) |> result.unwrap(False)
-          case !t.muted && is_step_on {
-            True -> Ok("v" <> int.to_string(t.voice) <> " l1")
-            False -> Error(Nil)
-          }
-        })
-        |> string.join(" ")
+// Compiles a sound's track into its own dedicated pattern (y0-y15).
+// In Skode, a pattern's length is determined by its last non-empty step.
+// If step 15 does not contain a note trigger, a harmless register write [=127,0] x15
+// is emitted to pin the pattern length to exactly 16 steps without audio side-effects.
+pub fn compile_track_pattern(track: Track) -> String {
+  let pat_idx = track.voice
+  let header = "y" <> int.to_string(pat_idx) <> "\n"
+  let ctrl = case pat_idx == 0 {
+    True -> "yc1\n"
+    False -> ""
+  }
+  let mute = case track.muted {
+    True -> "ym1\n"
+    False -> "ym0\n"
+  }
 
-      case active_voices {
-        "" -> "[] x" <> int.to_string(step_idx) <> "\n"
-        triggers -> "[" <> triggers <> "] x" <> int.to_string(step_idx) <> "\n"
+  let step_commands = range(0, 14)
+    |> list.map(fn(step_idx) {
+      let is_step_on = get_at(track.steps, step_idx) |> result.unwrap(False)
+      case !track.muted && is_step_on {
+        True -> "[v" <> int.to_string(track.voice) <> " l1] x" <> int.to_string(step_idx) <> "\n"
+        False -> "[] x" <> int.to_string(step_idx) <> "\n"
       }
     })
     |> string.concat
 
-  header <> step_commands
+  let step_15 = {
+    let is_step_15_on = get_at(track.steps, 15) |> result.unwrap(False)
+    case !track.muted && is_step_15_on {
+      True -> "[v" <> int.to_string(track.voice) <> " l1] x15\n"
+      False -> "[=127,0] x15\n"
+    }
+  }
+
+  header <> ctrl <> mute <> step_commands <> step_15
+}
+
+pub fn compile_all_patterns(tracks: List(Track), bpm: Float) -> String {
+  let header = "M " <> int.to_string(float.round(bpm)) <> " 16\n"
+  let pattern_commands = tracks
+    |> list.map(compile_track_pattern)
+    |> string.concat
+
+  header <> pattern_commands
 }
 
 // =============================================================================
@@ -290,15 +321,15 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     TogglePlay -> {
       case model.playing {
         True -> {
-          #(Model(..model, playing: False), skred.command("y0 z0"))
+          #(Model(..model, playing: False), skred.command("Z0"))
         }
         False -> {
-          let pattern_cmd = compile_pattern(model.tracks, model.bpm)
+          let pattern_cmd = compile_all_patterns(model.tracks, model.bpm)
           #(
             Model(..model, playing: True),
             effect.batch([
               skred.command(pattern_cmd),
-              skred.command("y0 z1"),
+              skred.command("Z1"),
             ]),
           )
         }
@@ -310,11 +341,8 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
         Ok(v) if v >=. 50.0 && v <=. 220.0 -> v
         _ -> model.bpm
       }
-      let effect = case model.playing {
-        True -> skred.command("M " <> int.to_string(float.round(bpm)) <> " 16")
-        False -> skred.command("t " <> float.to_string(bpm))
-      }
-      #(Model(..model, bpm: bpm), effect)
+      let cmd = skred.command("M " <> int.to_string(float.round(bpm)) <> " 16")
+      #(Model(..model, bpm: bpm), cmd)
     }
 
     ToggleStep(track_idx, step_idx) -> {
@@ -335,18 +363,18 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           }
         })
 
-      let pattern_cmd = compile_pattern(updated_tracks, model.bpm)
+      let track = get_at(updated_tracks, track_idx) |> result.unwrap(Track("", "", 0, "", [], False))
+      let track_cmd = compile_track_pattern(track)
       let side_effect = case model.playing {
-        True -> skred.command(pattern_cmd)
+        True -> skred.command(track_cmd)
         False -> {
-          let track = get_at(updated_tracks, track_idx) |> result.unwrap(Track("", "", 0, "", [], False))
           let step_on = get_at(track.steps, step_idx) |> result.unwrap(False)
           case step_on {
             True -> effect.batch([
-              skred.command(pattern_cmd),
+              skred.command(track_cmd),
               skred.trigger(track.voice, 0.95),
             ])
-            False -> skred.command(pattern_cmd)
+            False -> skred.command(track_cmd)
           }
         }
       }
@@ -363,8 +391,9 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           }
         })
 
-      let pattern_cmd = compile_pattern(updated_tracks, model.bpm)
-      #(Model(..model, tracks: updated_tracks), skred.command(pattern_cmd))
+      let track = get_at(updated_tracks, track_idx) |> result.unwrap(Track("", "", 0, "", [], False))
+      let track_cmd = compile_track_pattern(track)
+      #(Model(..model, tracks: updated_tracks), skred.command(track_cmd))
     }
 
     TriggerPad(pad_id, voice, pitch) -> {
@@ -414,32 +443,62 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       let new_tracks = case preset_name {
         "techno" -> [
           Track("Kick 909", "🥁", 0, "#ff3366", preset_four_on_floor(), False),
+          Track("Kick Tight", "🥊", 1, "#ff5577", empty_16_steps(), False),
           Track("Snare 909", "💥", 2, "#ff9900", preset_backbeat(), False),
+          Track("Clap 909", "👏", 3, "#ffaa22", [False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, False], False),
           Track("Closed Hat", "⚡", 4, "#ffea00", preset_eighths(), False),
           Track("Open Hat", "✨", 5, "#00e5ff", preset_offbeats(), False),
-          Track("Bass 303", "🎸", 8, "#00ff88", preset_bassline(), False),
-          Track("Synth Lead", "🎹", 12, "#cc00ff", preset_leadline(), False),
+          Track("Hat Roll", "💫", 6, "#ffee55", [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True], False),
+          Track("Rimshot", "🥢", 7, "#ff8844", empty_16_steps(), False),
+          Track("Bass C2", "🎸", 8, "#00ff88", preset_bassline(), False),
+          Track("Bass E2", "🎸", 9, "#00dd77", empty_16_steps(), False),
+          Track("Bass G2", "🎸", 10, "#00bb66", empty_16_steps(), False),
+          Track("Bass A2", "🎸", 11, "#009955", empty_16_steps(), False),
+          Track("Lead C4", "🎹", 12, "#cc00ff", preset_leadline(), False),
+          Track("Lead E4", "🎹", 13, "#aa00dd", empty_16_steps(), False),
+          Track("Lead G4", "🎹", 14, "#8800bb", empty_16_steps(), False),
+          Track("Lead B4", "🎹", 15, "#660099", empty_16_steps(), False),
         ]
         "industrial" -> [
           Track("Kick 909", "🥁", 0, "#ff3366", [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False], False),
+          Track("Kick Tight", "🥊", 1, "#ff5577", [False, True, False, True, False, False, False, True, False, True, False, False, False, True, False, False], False),
           Track("Snare 909", "💥", 2, "#ff9900", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, True, True], False),
+          Track("Clap 909", "👏", 3, "#ffaa22", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False], False),
           Track("Closed Hat", "⚡", 4, "#ffea00", list.repeat(True, times: 16), False),
           Track("Open Hat", "✨", 5, "#00e5ff", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False], False),
-          Track("Bass 303", "🎸", 8, "#00ff88", [True, False, False, True, False, False, True, False, False, True, False, False, True, False, True, False], False),
-          Track("Synth Lead", "🎹", 12, "#cc00ff", [False, False, True, False, True, False, False, False, False, False, True, False, True, False, False, False], False),
+          Track("Hat Roll", "💫", 6, "#ffee55", [False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True], False),
+          Track("Rimshot", "🥢", 7, "#ff8844", [False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False], False),
+          Track("Bass C2", "🎸", 8, "#00ff88", [True, False, False, True, False, False, True, False, False, True, False, False, True, False, True, False], False),
+          Track("Bass E2", "🎸", 9, "#00dd77", [False, False, True, False, False, True, False, False, True, False, False, True, False, False, False, False], False),
+          Track("Bass G2", "🎸", 10, "#00bb66", empty_16_steps(), False),
+          Track("Bass A2", "🎸", 11, "#009955", empty_16_steps(), False),
+          Track("Lead C4", "🎹", 12, "#cc00ff", [False, False, True, False, True, False, False, False, False, False, True, False, True, False, False, False], False),
+          Track("Lead E4", "🎹", 13, "#aa00dd", empty_16_steps(), False),
+          Track("Lead G4", "🎹", 14, "#8800bb", [False, False, False, False, False, False, False, True, False, False, False, False, False, False, True, False], False),
+          Track("Lead B4", "🎹", 15, "#660099", empty_16_steps(), False),
         ]
         "synthwave" -> [
           Track("Kick 909", "🥁", 0, "#ff3366", preset_four_on_floor(), False),
+          Track("Kick Tight", "🥊", 1, "#ff5577", empty_16_steps(), False),
           Track("Snare 909", "💥", 2, "#ff9900", preset_backbeat(), False),
+          Track("Clap 909", "👏", 3, "#ffaa22", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False], False),
           Track("Closed Hat", "⚡", 4, "#ffea00", preset_eighths(), False),
           Track("Open Hat", "✨", 5, "#00e5ff", [False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False], False),
-          Track("Bass 303", "🎸", 8, "#00ff88", list.repeat(True, times: 16), False),
-          Track("Synth Lead", "🎹", 12, "#cc00ff", [True, False, False, False, False, False, True, False, True, False, False, False, True, False, False, False], False),
+          Track("Hat Roll", "💫", 6, "#ffee55", empty_16_steps(), False),
+          Track("Rimshot", "🥢", 7, "#ff8844", empty_16_steps(), False),
+          Track("Bass C2", "🎸", 8, "#00ff88", list.repeat(True, times: 16), False),
+          Track("Bass E2", "🎸", 9, "#00dd77", empty_16_steps(), False),
+          Track("Bass G2", "🎸", 10, "#00bb66", empty_16_steps(), False),
+          Track("Bass A2", "🎸", 11, "#009955", empty_16_steps(), False),
+          Track("Lead C4", "🎹", 12, "#cc00ff", [True, False, False, False, False, False, True, False, True, False, False, False, True, False, False, False], False),
+          Track("Lead E4", "🎹", 13, "#aa00dd", [False, False, False, True, False, False, False, False, False, False, False, True, False, False, False, False], False),
+          Track("Lead G4", "🎹", 14, "#8800bb", empty_16_steps(), False),
+          Track("Lead B4", "🎹", 15, "#660099", empty_16_steps(), False),
         ]
         _ -> model.tracks
       }
 
-      let pattern_cmd = compile_pattern(new_tracks, model.bpm)
+      let pattern_cmd = compile_all_patterns(new_tracks, model.bpm)
       #(Model(..model, tracks: new_tracks), skred.command(pattern_cmd))
     }
 
@@ -447,7 +506,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       let cleared_tracks = model.tracks
         |> list.map(fn(t) { Track(..t, steps: empty_16_steps()) })
       
-      let pattern_cmd = compile_pattern(cleared_tracks, model.bpm)
+      let pattern_cmd = compile_all_patterns(cleared_tracks, model.bpm)
       #(Model(..model, tracks: cleared_tracks), skred.command(pattern_cmd))
     }
 
@@ -1339,7 +1398,7 @@ fn view_footer(model: Model) -> Element(Msg) {
       html.span([attribute.class("status-led-pulse")], []),
       html.span([attribute.class("telemetry-title")], [html.text("SKRED ENGINE 0.79:")]),
       html.span([attribute.class("status-text")], [
-        html.text("ALSA 48 kHz • 256 VOICES • 60 FPS EVENT DRAIN • BUFFERED: " <> int.to_string(list.length(model.control_events))),
+        html.text("ALSA 48 kHz • 256 VOICES • 16 PATTERNS (y0-y15) • 60 FPS EVENT DRAIN • BUFFERED: " <> int.to_string(list.length(model.control_events))),
       ]),
     ]),
 

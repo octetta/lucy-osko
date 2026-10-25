@@ -259,8 +259,8 @@ static void init_synth_engine(void) {
         skred_command(cmd);
     }
 
-    // Enable pattern boundary & step events on patterns 0..7
-    for (int i = 0; i < 8; i++) {
+    // Enable pattern boundary & step events on patterns 0..15
+    for (int i = 0; i < 16; i++) {
         char cmd[32];
         snprintf(cmd, sizeof(cmd), "y%d yc1", i);
         skred_command(cmd);

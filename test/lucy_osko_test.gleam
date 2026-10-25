@@ -1,5 +1,8 @@
 import gleam/json
+import gleam/list
+import gleam/string
 import gleeunit
+import lucy_osko.{Track}
 import skred
 
 pub fn main() -> Nil {
@@ -56,4 +59,51 @@ pub fn decode_control_plane_diagnostics_test() {
   assert item.info.val0 == 10.0
   assert item.info.val1 == 20.0
   assert item.info.val2 == 30.0
+}
+
+pub fn compile_track_pattern_empty_step_15_test() {
+  // Empty track on voice 2 (Snare) should select pattern y2 and pin step 15 with [=127,0] x15
+  let empty_steps = list.repeat(False, times: 16)
+  let track = Track("Snare", "💥", 2, "#ff9900", empty_steps, False)
+  let cmd = lucy_osko.compile_track_pattern(track)
+
+  assert string.starts_with(cmd, "y2\nym0\n")
+  assert string.contains(cmd, "[=127,0] x15\n")
+  assert !string.contains(cmd, "v2 l1")
+}
+
+pub fn compile_track_pattern_active_step_15_test() {
+  // Track on voice 4 with hit on step 15 should output [v4 l1] x15 without [=127,0] x15
+  let steps = [
+    False, False, False, False, False, False, False, False,
+    False, False, False, False, False, False, False, True,
+  ]
+  let track = Track("Hat", "⚡", 4, "#ffea00", steps, False)
+  let cmd = lucy_osko.compile_track_pattern(track)
+
+  assert string.starts_with(cmd, "y4\nym0\n")
+  assert string.contains(cmd, "[v4 l1] x15\n")
+  assert !string.contains(cmd, "=127,0")
+}
+
+pub fn compile_track_pattern_voice_0_includes_yc1_test() {
+  // Pattern 0 (Kick / master sync) should include yc1
+  let steps = list.repeat(False, times: 16)
+  let track = Track("Kick", "🥁", 0, "#ff3366", steps, False)
+  let cmd = lucy_osko.compile_track_pattern(track)
+
+  assert string.starts_with(cmd, "y0\nyc1\nym0\n")
+}
+
+pub fn compile_all_patterns_tempo_header_test() {
+  let steps = list.repeat(False, times: 16)
+  let tracks = [
+    Track("Kick", "🥁", 0, "#ff3366", steps, False),
+    Track("Snare", "💥", 2, "#ff9900", steps, False),
+  ]
+  let cmd = lucy_osko.compile_all_patterns(tracks, 128.0)
+
+  assert string.starts_with(cmd, "M 128 16\n")
+  assert string.contains(cmd, "y0\nyc1\n")
+  assert string.contains(cmd, "y2\n")
 }
