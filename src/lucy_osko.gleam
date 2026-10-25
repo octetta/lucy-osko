@@ -118,6 +118,7 @@ pub type Msg {
   ClearControlEvents
   SetEventFilter(String)
   EmitTestUserEvent
+  RunControlCommand(String)
   OnControlPlaneEvents(List(ControlPlaneEvent))
 }
 
@@ -136,26 +137,26 @@ fn init(_) -> #(Model, Effect(Msg)) {
   ]
 
   let default_pads = [
-    // Row 1: Drums
-    Pad(0, 0, "KICK", "Sub 909", 55.0, "#ff3366", False),
-    Pad(1, 0, "KICK TIGHT", "Punch", 65.0, "#ff3366", False),
-    Pad(2, 1, "SNARE", "Crisp", 220.0, "#ff9900", False),
+    // Row 1: Drums (440 Hz root playback for wave 82-86)
+    Pad(0, 0, "KICK", "909 Punch", 440.0, "#ff3366", False),
+    Pad(1, 0, "KICK TIGHT", "High Punch", 490.0, "#ff3366", False),
+    Pad(2, 1, "SNARE", "Crisp 909", 440.0, "#ff9900", False),
     Pad(3, 7, "CLAP", "909 Clap", 440.0, "#ff9900", False),
     // Row 2: Hats & Percussion
-    Pad(4, 2, "CH HAT", "Tight", 7500.0, "#ffea00", False),
-    Pad(5, 3, "OP HAT", "Sizzle", 7200.0, "#00e5ff", False),
-    Pad(6, 2, "HAT ROLL", "16th", 8000.0, "#ffea00", False),
-    Pad(7, 7, "RIM", "Wood", 500.0, "#ff9900", False),
-    // Row 3: Bass 303
-    Pad(8, 4, "BASS C2", "65.4 Hz", 65.41, "#00ff88", False),
-    Pad(9, 4, "BASS E2", "82.4 Hz", 82.41, "#00ff88", False),
-    Pad(10, 4, "BASS G2", "98.0 Hz", 97.99, "#00ff88", False),
-    Pad(11, 4, "BASS A2", "110.0 Hz", 110.00, "#00ff88", False),
-    // Row 4: Lead Synths
-    Pad(12, 5, "LEAD C4", "261.6 Hz", 261.63, "#cc00ff", False),
-    Pad(13, 5, "LEAD E4", "329.6 Hz", 329.63, "#cc00ff", False),
-    Pad(14, 5, "LEAD G4", "392.0 Hz", 392.00, "#cc00ff", False),
-    Pad(15, 5, "LEAD B4", "493.8 Hz", 493.88, "#cc00ff", False),
+    Pad(4, 2, "CH HAT", "Closed Hat", 440.0, "#ffea00", False),
+    Pad(5, 3, "OP HAT", "Open Hat", 440.0, "#00e5ff", False),
+    Pad(6, 2, "HAT ROLL", "Fast Hat", 470.0, "#ffea00", False),
+    Pad(7, 7, "CLAP HI", "Accented", 480.0, "#ff9900", False),
+    // Row 3: Bass 303 (MIDI Note numbers 36..45)
+    Pad(8, 4, "BASS C2", "MIDI 36", 36.0, "#00ff88", False),
+    Pad(9, 4, "BASS E2", "MIDI 40", 40.0, "#00ff88", False),
+    Pad(10, 4, "BASS G2", "MIDI 43", 43.0, "#00ff88", False),
+    Pad(11, 4, "BASS A2", "MIDI 45", 45.0, "#00ff88", False),
+    // Row 4: Lead Synths (MIDI Note numbers 60..71)
+    Pad(12, 5, "LEAD C4", "MIDI 60", 60.0, "#cc00ff", False),
+    Pad(13, 5, "LEAD E4", "MIDI 64", 64.0, "#cc00ff", False),
+    Pad(14, 5, "LEAD G4", "MIDI 67", 67.0, "#cc00ff", False),
+    Pad(15, 5, "LEAD B4", "MIDI 71", 71.0, "#cc00ff", False),
   ]
 
   let initial_model = Model(
@@ -172,7 +173,16 @@ fn init(_) -> #(Model, Effect(Msg)) {
     command_history: [
       CommandHistoryEntry("?v", 0, "Skred 0.79.0 maxed - ALSA 48kHz audio initialized\n"),
     ],
-    history_commands: ["/a?", "?ce", "?q", "v0 ?"],
+    history_commands: [
+      "?ce",
+      "ce 42, 100, 200, 300",
+      "[v1 l1] /ceb 4 42",
+      "/cer 1",
+      "?ce!",
+      "/ce!",
+      "/a?",
+      "v0 ?",
+    ],
     history_index: -1,
     saved_draft: "",
     control_events: [],
@@ -573,6 +583,18 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 
     EmitTestUserEvent -> {
       #(model, skred.execute_command("ce 42, 100, 200, 300"))
+    }
+
+    RunControlCommand(cmd) -> {
+      let updated_history = case model.history_commands {
+        [first, ..rest] if first == cmd -> [cmd, ..rest]
+        others -> [cmd, ..others]
+      } |> list.take(50)
+
+      #(
+        Model(..model, history_commands: updated_history, history_index: -1),
+        skred.execute_command(cmd),
+      )
     }
 
     OnControlPlaneEvents(events) -> {
@@ -1090,13 +1112,28 @@ fn view_control_plane_header(model: Model) -> Element(Msg) {
       ),
 
       html.button(
-        [attribute.class("btn btn-sm"), event.on_click(EmitTestUserEvent)],
+        [attribute.class("btn btn-sm"), event.on_click(RunControlCommand("ce 42, 100, 200, 300"))],
         [html.text("EMIT ce 42")],
       ),
 
       html.button(
+        [attribute.class("btn btn-sm"), event.on_click(RunControlCommand("ce 99, 1, 2, 3"))],
+        [html.text("EMIT ce 99")],
+      ),
+
+      html.button(
+        [attribute.class("btn btn-sm"), event.on_click(RunControlCommand("?ce"))],
+        [html.text("?ce")],
+      ),
+
+      html.button(
+        [attribute.class("btn btn-sm"), event.on_click(RunControlCommand("?ce!"))],
+        [html.text("?ce!")],
+      ),
+
+      html.button(
         [attribute.class("btn btn-sm btn-clear"), event.on_click(ClearControlEvents)],
-        [html.text("CLEAR")],
+        [html.text("CLEAR TABLE")],
       ),
     ]),
   ])
@@ -1114,6 +1151,42 @@ fn view_control_plane_table(model: Model) -> Element(Msg) {
     })
 
   html.div([attribute.class("events-table-wrapper")], [
+    // Control Plane Command Ribbon
+    html.div([attribute.class("control-plane-ribbon")], [
+      html.span([attribute.class("ribbon-label")], [html.text("CONTROL PLANE:")]),
+      html.button(
+        [attribute.class("ribbon-pill"), event.on_click(RunControlCommand("ce 42, 100, 200, 300"))],
+        [html.text("ce 42 User Marker")],
+      ),
+      html.button(
+        [attribute.class("ribbon-pill"), event.on_click(RunControlCommand("ce 99, 1, 2, 3"))],
+        [html.text("ce 99 Marker")],
+      ),
+      html.button(
+        [attribute.class("ribbon-pill accent"), event.on_click(RunControlCommand("[v1 l1] /ceb 4 42"))],
+        [html.text("[v1 l1] /ceb 4 42 (Bind Snare)")],
+      ),
+      html.button(
+        [attribute.class("ribbon-pill accent"), event.on_click(RunControlCommand("/cer 1"))],
+        [html.text("/cer 1 (Start Dispatcher)")],
+      ),
+      html.button(
+        [attribute.class("ribbon-pill"), event.on_click(RunControlCommand("?ce"))],
+        [html.text("?ce (Ring Status)")],
+      ),
+      html.button(
+        [attribute.class("ribbon-pill"), event.on_click(RunControlCommand("?ce!"))],
+        [html.text("?ce! (Flush Ring)")],
+      ),
+      html.button(
+        [attribute.class("ribbon-pill"), event.on_click(RunControlCommand("/ce!"))],
+        [html.text("/ce! (Clear Bindings)")],
+      ),
+      html.button(
+        [attribute.class("ribbon-pill"), event.on_click(RunControlCommand("v0 vc1"))],
+        [html.text("v0 vc1 (Voice Lifecycle)")],
+      ),
+    ]),
     html.table([attribute.class("events-table")], [
       html.thead([], [
         html.tr([], [
@@ -1190,12 +1263,15 @@ fn view_console_panel(model: Model) -> Element(Msg) {
       ]),
 
       html.div([attribute.class("quick-queries")], [
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?ce"))], [html.text("?ce Ring")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?ce!"))], [html.text("?ce! Flush")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("ce 42, 100, 200, 300"))], [html.text("ce 42 Marker")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("[v1 l1] /ceb 4 42"))], [html.text("/ceb Bind")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("/cer 1"))], [html.text("/cer 1 Dispatch")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("/ce!"))], [html.text("/ce! Unbind")]),
         html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("/a?"))], [html.text("/a? Audio")]),
         html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?q"))], [html.text("?q Queue")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?ce"))], [html.text("?ce Events")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("v0 ?"))], [html.text("v0 ? State")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?m"))], [html.text("?m Macros")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("[hello from gleam] puts"))], [html.text("puts")]),
+        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("v0 ?"))], [html.text("v0 ? Kick")]),
       ]),
     ]),
 

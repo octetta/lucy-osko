@@ -156,22 +156,32 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
         }
     } else if (strcmp(action, "trig") == 0) {
         int voice = 0;
-        float vel = 0.8f;
+        float vel = 1.0f;
         json_get_int(arg, "voice", &voice);
         json_get_float(arg, "vel", &vel);
-        skred_trigger_voice(voice, vel);
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "v%d l%.2f", voice, vel);
+        skred_command(cmd);
     } else if (strcmp(action, "trig_p") == 0) {
         int voice = 0;
-        float pitch = 220.0f;
-        float vel = 0.8f;
+        float pitch = 440.0f;
+        float vel = 1.0f;
         json_get_int(arg, "voice", &voice);
         json_get_float(arg, "pitch", &pitch);
         json_get_float(arg, "vel", &vel);
-        skred_trigger_voice_pitch_velocity(voice, pitch, vel);
+        char cmd[64];
+        if (pitch <= 127.0f) {
+            snprintf(cmd, sizeof(cmd), "v%d n%.1f l%.2f", voice, pitch, vel);
+        } else {
+            snprintf(cmd, sizeof(cmd), "v%d f%.1f l%.2f", voice, pitch, vel);
+        }
+        skred_command(cmd);
     } else if (strcmp(action, "rel") == 0) {
         int voice = 0;
         json_get_int(arg, "voice", &voice);
-        skred_release_voice(voice);
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "v%d l0", voice);
+        skred_command(cmd);
     }
 }
 
@@ -244,17 +254,17 @@ static void init_synth_engine(void) {
     // Master Tempo and 16-step grid default
     skred_command("M 124 16");
 
-    // Voice 0: Punchy Built-in 909 Kick (wave 82)
-    skred_command("v0 w82 f440 a6 p 0");
+    // Voice 0: Punchy Built-in 909 Kick (wave 82, boosted to a10)
+    skred_command("v0 w82 f440 a10 p 0");
 
-    // Voice 1: Snappy 909 Snare (wave 83)
-    skred_command("v1 w83 f440 a7 p 0");
+    // Voice 1: Snappy 909 Snare (wave 83, boosted to a10)
+    skred_command("v1 w83 f440 a10 p 0");
 
-    // Voice 2: Crisp Closed HiHat (wave 84)
-    skred_command("v2 w84 f440 a-3 p 0.2");
+    // Voice 2: Crisp Closed HiHat (wave 84, boosted to a5)
+    skred_command("v2 w84 f440 a5 p 0.2");
 
-    // Voice 3: Sizzling Open HiHat (wave 85)
-    skred_command("v3 w85 f440 a-2 p -0.2");
+    // Voice 3: Sizzling Open HiHat (wave 85, boosted to a6)
+    skred_command("v3 w85 f440 a6 p -0.2");
 
     // Voice 4: Heavy Resonant Bass (Sawtooth w15)
     skred_command("v4 w15 a0 t.002,.25,.2,.1 j1 k450 q6");
@@ -265,8 +275,8 @@ static void init_synth_engine(void) {
     // Voice 6: Acid 303 Screamer (Saw w15 with resonant sweep)
     skred_command("v6 w15 a0 t.002,.20,0,.06 j1,2 k600 q10 ft.001,.18,0,.06 fd2600");
 
-    // Voice 7: 909 Clap (wave 86)
-    skred_command("v7 w86 f440 a6 p 0");
+    // Voice 7: 909 Clap (wave 86, boosted to a10)
+    skred_command("v7 w86 f440 a10 p 0");
 }
 
 int main(int argc, char **argv) {

@@ -640,6 +640,57 @@
       color: var(--accent-green);
     }
 
+    .control-plane-ribbon {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      background: #0f131c;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      font-size: 0.72rem;
+    }
+
+    .ribbon-label {
+      color: var(--accent-glow);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 0.65rem;
+      letter-spacing: 0.05em;
+      margin-right: 4px;
+    }
+
+    .ribbon-pill {
+      background: #182030;
+      border: 1px solid #283652;
+      color: #b0c4de;
+      font-size: 0.68rem;
+      font-family: monospace;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .ribbon-pill:hover {
+      background: #24324f;
+      border-color: var(--accent-glow);
+      color: #fff;
+    }
+
+    .ribbon-pill.accent {
+      border-color: #634394;
+      color: #d19eff;
+    }
+
+    .ribbon-pill.accent:hover {
+      background: #39245e;
+      border-color: var(--accent-purple);
+      color: #fff;
+    }
+
     .events-table-wrapper {
       flex: 1;
       overflow-y: auto;
