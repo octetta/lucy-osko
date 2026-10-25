@@ -83,6 +83,9 @@ pub type Model {
     // Console REPL state
     command_input: String,
     command_history: List(CommandHistoryEntry),
+    history_commands: List(String),
+    history_index: Int,
+    saved_draft: String,
     // Control Plane state
     control_events: List(ControlEventInfo),
     stream_paused: Bool,
@@ -108,6 +111,7 @@ pub type Msg {
   SetCommandInput(String)
   SubmitCommand
   RunQuickCommand(String)
+  OnCommandKeyDown(String)
   OnCommandResult(CommandResult)
   // Control Plane Inspector messages
   ToggleStreamPause
@@ -168,6 +172,9 @@ fn init(_) -> #(Model, Effect(Msg)) {
     command_history: [
       CommandHistoryEntry("?v", 0, "Skred 0.79.0 maxed - ALSA 48kHz audio initialized\n"),
     ],
+    history_commands: ["/a?", "?ce", "?q", "v0 ?"],
+    history_index: -1,
+    saved_draft: "",
     control_events: [],
     stream_paused: False,
     event_filter: "ALL",
@@ -440,22 +447,109 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 
     // --- REPL Console ---
     SetCommandInput(text) -> {
-      #(Model(..model, command_input: text), effect.none())
+      #(
+        Model(..model, command_input: text, history_index: -1),
+        effect.none(),
+      )
     }
 
     SubmitCommand -> {
       let trimmed = string.trim(model.command_input)
       case trimmed {
         "" -> #(model, effect.none())
-        cmd -> #(
-          Model(..model, command_input: ""),
-          skred.execute_command(cmd),
-        )
+        cmd -> {
+          let updated_history = case model.history_commands {
+            [first, ..rest] if first == cmd -> [cmd, ..rest]
+            others -> [cmd, ..others]
+          } |> list.take(50)
+
+          #(
+            Model(
+              ..model,
+              command_input: "",
+              history_commands: updated_history,
+              history_index: -1,
+              saved_draft: "",
+            ),
+            skred.execute_command(cmd),
+          )
+        }
       }
     }
 
     RunQuickCommand(cmd) -> {
-      #(model, skred.execute_command(cmd))
+      let updated_history = case model.history_commands {
+        [first, ..rest] if first == cmd -> [cmd, ..rest]
+        others -> [cmd, ..others]
+      } |> list.take(50)
+
+      #(
+        Model(
+          ..model,
+          history_commands: updated_history,
+          history_index: -1,
+          saved_draft: "",
+        ),
+        skred.execute_command(cmd),
+      )
+    }
+
+    OnCommandKeyDown(key) -> {
+      case key {
+        "Enter" -> update(model, SubmitCommand)
+        "ArrowUp" -> {
+          case model.history_commands {
+            [] -> #(model, effect.none())
+            _ -> {
+              let next_index = model.history_index + 1
+              case get_at(model.history_commands, next_index) {
+                Ok(recalled_cmd) -> {
+                  let draft = case model.history_index < 0 {
+                    True -> model.command_input
+                    False -> model.saved_draft
+                  }
+                  #(
+                    Model(
+                      ..model,
+                      command_input: recalled_cmd,
+                      history_index: next_index,
+                      saved_draft: draft,
+                    ),
+                    effect.none(),
+                  )
+                }
+                Error(_) -> #(model, effect.none())
+              }
+            }
+          }
+        }
+        "ArrowDown" -> {
+          case model.history_index {
+            idx if idx > 0 -> {
+              let next_index = idx - 1
+              case get_at(model.history_commands, next_index) {
+                Ok(recalled_cmd) -> #(
+                  Model(..model, command_input: recalled_cmd, history_index: next_index),
+                  effect.none(),
+                )
+                Error(_) -> #(model, effect.none())
+              }
+            }
+            0 -> {
+              #(
+                Model(
+                  ..model,
+                  command_input: model.saved_draft,
+                  history_index: -1,
+                ),
+                effect.none(),
+              )
+            }
+            _ -> #(model, effect.none())
+          }
+        }
+        _ -> #(model, effect.none())
+      }
     }
 
     OnCommandResult(res) -> {
@@ -1136,11 +1230,13 @@ fn view_console_panel(model: Model) -> Element(Msg) {
     html.div([attribute.class("command-input-bar")], [
       html.span([attribute.class("input-prompt")], [html.text(">")]),
       html.input([
+        attribute.id("repl-cmd-input"),
         attribute.class("cmd-input-field"),
         attribute.type_("text"),
-        attribute.placeholder("Enter Skode command (e.g. ?q, /a?, v0 ?, [test] puts, ce 42, 1, 2, 3)..."),
+        attribute.placeholder("Enter Skode command (press Enter to send, ↑/↓ for history)..."),
         attribute.value(model.command_input),
         event.on_input(SetCommandInput),
+        event.on_keydown(OnCommandKeyDown),
       ]),
       html.button(
         [attribute.class("btn btn-exec"), event.on_click(SubmitCommand)],
