@@ -295,16 +295,16 @@ static void init_synth_engine(void) {
     skred_command("v7 w87 f440 a8 p 0.1");
 
     // Voices 8..11: Heavy Resonant Bass 303 (Sawtooth w15, MIDI notes 36, 40, 43, 45)
-    skred_command("v8 w15 a0 t.002,.25,.2,.1 j1 k450 q6 n36");
-    skred_command("v9 w15 a0 t.002,.25,.2,.1 j1 k450 q6 n40");
-    skred_command("v10 w15 a0 t.002,.25,.2,.1 j1 k450 q6 n43");
-    skred_command("v11 w15 a0 t.002,.25,.2,.1 j1 k450 q6 n45");
+    skred_command("v8 w15 a0 t .01 .25 0 0 j1 k450 q6 n36");
+    skred_command("v9 w15 a0 t .01 .25 0 0 j1 k450 q6 n40");
+    skred_command("v10 w15 a0 t .01 .25 0 0 j1 k450 q6 n43");
+    skred_command("v11 w15 a0 t .01 .25 0 0 j1 k450 q6 n45");
 
     // Voices 12..15: Synth Lead / Pluck (Square w16, MIDI notes 60, 64, 67, 71)
-    skred_command("v12 w16 a-2 t.004,.3,.1,.15 j1 k1800 q2 n60");
-    skred_command("v13 w16 a-2 t.004,.3,.1,.15 j1 k1800 q2 n64");
-    skred_command("v14 w16 a-2 t.004,.3,.1,.15 j1 k1800 q2 n67");
-    skred_command("v15 w16 a-2 t.004,.3,.1,.15 j1 k1800 q2 n71");
+    skred_command("v12 w16 a-2 t .01 .25 0 0 j1 k1800 q2 n60");
+    skred_command("v13 w16 a-2 t .01 .25 0 0 j1 k1800 q2 n64");
+    skred_command("v14 w16 a-2 t .01 .25 0 0 j1 k1800 q2 n67");
+    skred_command("v15 w16 a-2 t .01 .25 0 0 j1 k1800 q2 n71");
 }
 
 int main(int argc, char **argv) {
