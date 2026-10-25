@@ -1,0 +1,5 @@
+[tools]
+erlang = "latest"
+gleam = "latest"
+rebar = "latest"
+node = "20.20.2"

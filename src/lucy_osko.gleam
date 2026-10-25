@@ -1,0 +1,742 @@
+//// Lucy Osko: Community showcase for Gleam + Lustre running on a native C / webview.h host
+//// with hard real-time bidirectional FFI communication to the Skred audio synthesizer engine.
+
+import gleam/float
+import gleam/int
+import gleam/list
+import gleam/result
+import gleam/string
+import lustre
+import lustre/attribute
+import lustre/effect.{type Effect}
+import lustre/element.{type Element}
+import lustre/element/html
+import lustre/event
+import skred.{type SkredEvent}
+
+// =============================================================================
+// MAIN ENTRYPOINT
+// =============================================================================
+
+pub fn main() {
+  let app = lustre.application(init, update, view)
+  let assert Ok(_) = lustre.start(app, "#app", Nil)
+  Nil
+}
+
+// =============================================================================
+// DATA TYPES
+// =============================================================================
+
+pub type Track {
+  Track(
+    name: String,
+    icon: String,
+    voice: Int,
+    color: String,
+    steps: List(Bool),
+    muted: Bool,
+  )
+}
+
+pub type Pad {
+  Pad(
+    id: Int,
+    voice: Int,
+    label: String,
+    sub: String,
+    pitch: Float,
+    color: String,
+    active: Bool,
+  )
+}
+
+pub type LogEntry {
+  LogEntry(time: String, desc: String, kind: String)
+}
+
+pub type Model {
+  Model(
+    playing: Bool,
+    current_step: Int,
+    bpm: Float,
+    tracks: List(Track),
+    pads: List(Pad),
+    cutoff: Float,
+    resonance: Float,
+    volume: Float,
+    log: List(LogEntry),
+    total_events: Int,
+  )
+}
+
+pub type Msg {
+  TogglePlay
+  SetBpm(String)
+  ToggleStep(track_idx: Int, step_idx: Int)
+  ToggleMute(track_idx: Int)
+  TriggerPad(pad_id: Int, voice: Int, pitch: Float)
+  ReleasePad(pad_id: Int, voice: Int)
+  SetCutoff(String)
+  SetResonance(String)
+  SetVolume(String)
+  LoadPreset(String)
+  ClearAll
+  OnSkredEvents(List(SkredEvent))
+}
+
+// =============================================================================
+// INITIAL STATE & PRESETS
+// =============================================================================
+
+fn init(_) -> #(Model, Effect(Msg)) {
+  let default_tracks = [
+    Track(name: "Kick 909", icon: "🥁", voice: 0, color: "#ff3366", steps: preset_four_on_floor(), muted: False),
+    Track(name: "Snare 909", icon: "💥", voice: 1, color: "#ff9900", steps: preset_backbeat(), muted: False),
+    Track(name: "Closed Hat", icon: "⚡", voice: 2, color: "#ffea00", steps: preset_eighths(), muted: False),
+    Track(name: "Open Hat", icon: "✨", voice: 3, color: "#00e5ff", steps: preset_offbeats(), muted: False),
+    Track(name: "Bass 303", icon: "🎸", voice: 4, color: "#00ff88", steps: preset_bassline(), muted: False),
+    Track(name: "Synth Lead", icon: "🎹", voice: 5, color: "#cc00ff", steps: preset_leadline(), muted: False),
+  ]
+
+  let default_pads = [
+    // Row 1: Drums
+    Pad(0, 0, "KICK", "Sub 909", 55.0, "#ff3366", False),
+    Pad(1, 0, "KICK TIGHT", "Punch", 65.0, "#ff3366", False),
+    Pad(2, 1, "SNARE", "Crisp", 220.0, "#ff9900", False),
+    Pad(3, 7, "CLAP", "909 Clap", 440.0, "#ff9900", False),
+    // Row 2: Hats & Percussion
+    Pad(4, 2, "CH HAT", "Tight", 7500.0, "#ffea00", False),
+    Pad(5, 3, "OP HAT", "Sizzle", 7200.0, "#00e5ff", False),
+    Pad(6, 2, "HAT ROLL", "16th", 8000.0, "#ffea00", False),
+    Pad(7, 7, "RIM", "Wood", 500.0, "#ff9900", False),
+    // Row 3: Bass 303
+    Pad(8, 4, "BASS C2", "65.4 Hz", 65.41, "#00ff88", False),
+    Pad(9, 4, "BASS E2", "82.4 Hz", 82.41, "#00ff88", False),
+    Pad(10, 4, "BASS G2", "98.0 Hz", 97.99, "#00ff88", False),
+    Pad(11, 4, "BASS A2", "110.0 Hz", 110.00, "#00ff88", False),
+    // Row 4: Lead Synths
+    Pad(12, 5, "LEAD C4", "261.6 Hz", 261.63, "#cc00ff", False),
+    Pad(13, 5, "LEAD E4", "329.6 Hz", 329.63, "#cc00ff", False),
+    Pad(14, 5, "LEAD G4", "392.0 Hz", 392.00, "#cc00ff", False),
+    Pad(15, 5, "LEAD B4", "493.8 Hz", 493.88, "#cc00ff", False),
+  ]
+
+  let initial_model = Model(
+    playing: False,
+    current_step: 0,
+    bpm: 124.0,
+    tracks: default_tracks,
+    pads: default_pads,
+    cutoff: 750.0,
+    resonance: 0.65,
+    volume: 0.85,
+    log: [LogEntry("00:00", "Lustre TEA runtime initialized", "sys")],
+    total_events: 0,
+  )
+
+  // Start subscription to Skred C host events immediately
+  #(initial_model, skred.subscribe(OnSkredEvents))
+}
+
+fn get_at(items: List(a), index: Int) -> Result(a, Nil) {
+  case index < 0 {
+    True -> Error(Nil)
+    False -> items |> list.drop(index) |> list.first
+  }
+}
+
+fn range(start: Int, end: Int) -> List(Int) {
+  case start > end {
+    True -> []
+    False -> [start, ..range(start + 1, end)]
+  }
+}
+
+// Preset step helpers
+fn preset_four_on_floor() -> List(Bool) {
+  [True, False, False, False, True, False, False, False, True, False, False, False, True, False, False, False]
+}
+
+fn preset_backbeat() -> List(Bool) {
+  [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False]
+}
+
+fn preset_eighths() -> List(Bool) {
+  [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]
+}
+
+fn preset_offbeats() -> List(Bool) {
+  [False, False, True, False, False, False, True, False, False, False, True, False, False, False, True, False]
+}
+
+fn preset_bassline() -> List(Bool) {
+  [False, False, True, False, False, True, False, False, True, False, False, True, False, True, False, False]
+}
+
+fn preset_leadline() -> List(Bool) {
+  [True, False, False, True, False, False, True, False, False, True, False, False, True, False, False, False]
+}
+
+fn empty_16_steps() -> List(Bool) {
+  list.repeat(False, times: 16)
+}
+
+// =============================================================================
+// PATTERN COMPILER (Elm Architecture -> Skode Engine Commands)
+// =============================================================================
+
+fn compile_pattern(tracks: List(Track), bpm: Float) -> String {
+  let header = "M " <> int.to_string(float.round(bpm)) <> " 16\ny0 yc1\n"
+  
+  // Build step triggers
+  let step_commands = range(0, 15)
+    |> list.map(fn(step_idx) {
+      let active_voices = tracks
+        |> list.filter_map(fn(t) {
+          let is_step_on = get_at(t.steps, step_idx) |> result.unwrap(False)
+          case !t.muted && is_step_on {
+            True -> Ok("v" <> int.to_string(t.voice) <> " l1")
+            False -> Error(Nil)
+          }
+        })
+        |> string.join(" ")
+
+      case active_voices {
+        "" -> ""
+        triggers -> "[" <> triggers <> "] x" <> int.to_string(step_idx) <> "\n"
+      }
+    })
+    |> string.concat
+
+  header <> step_commands <> "[=15,0] x15\n"
+}
+
+// =============================================================================
+// UPDATE
+// =============================================================================
+
+fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
+  case msg {
+    TogglePlay -> {
+      case model.playing {
+        True -> {
+          #(Model(..model, playing: False), skred.command("y0 z0"))
+        }
+        False -> {
+          let pattern_cmd = compile_pattern(model.tracks, model.bpm)
+          #(
+            Model(..model, playing: True),
+            effect.batch([
+              skred.command(pattern_cmd),
+              skred.command("y0 z1"),
+            ]),
+          )
+        }
+      }
+    }
+
+    SetBpm(str_val) -> {
+      let bpm = case float.parse(str_val) {
+        Ok(v) if v >=. 50.0 && v <=. 220.0 -> v
+        _ -> model.bpm
+      }
+      let effect = case model.playing {
+        True -> skred.command("M " <> int.to_string(float.round(bpm)) <> " 16")
+        False -> skred.command("t " <> float.to_string(bpm))
+      }
+      #(Model(..model, bpm: bpm), effect)
+    }
+
+    ToggleStep(track_idx, step_idx) -> {
+      let updated_tracks = model.tracks
+        |> list.index_map(fn(track, i) {
+          case i == track_idx {
+            True -> {
+              let updated_steps = track.steps
+                |> list.index_map(fn(val, s_i) {
+                  case s_i == step_idx {
+                    True -> !val
+                    False -> val
+                  }
+                })
+              Track(..track, steps: updated_steps)
+            }
+            False -> track
+          }
+        })
+
+      let side_effect = case model.playing {
+        True -> skred.command(compile_pattern(updated_tracks, model.bpm))
+        False -> {
+          // Play preview of the triggered voice if turned on
+          let track = get_at(updated_tracks, track_idx) |> result.unwrap(Track("", "", 0, "", [], False))
+          let step_on = get_at(track.steps, step_idx) |> result.unwrap(False)
+          case step_on {
+            True -> skred.trigger(track.voice, 0.85)
+            False -> effect.none()
+          }
+        }
+      }
+
+      #(Model(..model, tracks: updated_tracks), side_effect)
+    }
+
+    ToggleMute(track_idx) -> {
+      let updated_tracks = model.tracks
+        |> list.index_map(fn(track, i) {
+          case i == track_idx {
+            True -> Track(..track, muted: !track.muted)
+            False -> track
+          }
+        })
+
+      let effect = case model.playing {
+        True -> skred.command(compile_pattern(updated_tracks, model.bpm))
+        False -> effect.none()
+      }
+
+      #(Model(..model, tracks: updated_tracks), effect)
+    }
+
+    TriggerPad(pad_id, voice, pitch) -> {
+      let updated_pads = model.pads
+        |> list.map(fn(pad) {
+          case pad.id == pad_id {
+            True -> Pad(..pad, active: True)
+            False -> pad
+          }
+        })
+
+      #(Model(..model, pads: updated_pads), skred.trigger_pitch(voice, pitch, 0.95))
+    }
+
+    ReleasePad(pad_id, voice) -> {
+      let updated_pads = model.pads
+        |> list.map(fn(pad) {
+          case pad.id == pad_id {
+            True -> Pad(..pad, active: False)
+            False -> pad
+          }
+        })
+
+      #(Model(..model, pads: updated_pads), skred.release(voice))
+    }
+
+    SetCutoff(str_val) -> {
+      let cutoff = result.unwrap(float.parse(str_val), model.cutoff)
+      let cmd = "v4 k" <> float.to_string(cutoff) <> " v5 k" <> float.to_string(cutoff *. 1.5)
+      #(Model(..model, cutoff: cutoff), skred.command(cmd))
+    }
+
+    SetResonance(str_val) -> {
+      let res = result.unwrap(float.parse(str_val), model.resonance)
+      let cmd = "v4 q" <> float.to_string(res *. 10.0) <> " v5 q" <> float.to_string(res *. 8.0)
+      #(Model(..model, resonance: res), skred.command(cmd))
+    }
+
+    SetVolume(str_val) -> {
+      let vol = result.unwrap(float.parse(str_val), model.volume)
+      let cmd = "v4 a" <> float.to_string(vol *. 2.0 -. 2.0)
+      #(Model(..model, volume: vol), skred.command(cmd))
+    }
+
+    LoadPreset(preset_name) -> {
+      let new_tracks = case preset_name {
+        "techno" -> [
+          Track("Kick 909", "🥁", 0, "#ff3366", preset_four_on_floor(), False),
+          Track("Snare 909", "💥", 1, "#ff9900", preset_backbeat(), False),
+          Track("Closed Hat", "⚡", 2, "#ffea00", preset_eighths(), False),
+          Track("Open Hat", "✨", 3, "#00e5ff", preset_offbeats(), False),
+          Track("Bass 303", "🎸", 4, "#00ff88", preset_bassline(), False),
+          Track("Synth Lead", "🎹", 5, "#cc00ff", preset_leadline(), False),
+        ]
+        "industrial" -> [
+          Track("Kick 909", "🥁", 0, "#ff3366", [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False], False),
+          Track("Snare 909", "💥", 1, "#ff9900", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, True, True], False),
+          Track("Closed Hat", "⚡", 2, "#ffea00", list.repeat(True, times: 16), False),
+          Track("Open Hat", "✨", 3, "#00e5ff", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False], False),
+          Track("Bass 303", "🎸", 4, "#00ff88", [True, False, False, True, False, False, True, False, False, True, False, False, True, False, True, False], False),
+          Track("Synth Lead", "🎹", 5, "#cc00ff", [False, False, True, False, True, False, False, False, False, False, True, False, True, False, False, False], False),
+        ]
+        "synthwave" -> [
+          Track("Kick 909", "🥁", 0, "#ff3366", preset_four_on_floor(), False),
+          Track("Snare 909", "💥", 1, "#ff9900", preset_backbeat(), False),
+          Track("Closed Hat", "⚡", 2, "#ffea00", preset_eighths(), False),
+          Track("Open Hat", "✨", 3, "#00e5ff", [False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False], False),
+          Track("Bass 303", "🎸", 4, "#00ff88", list.repeat(True, times: 16), False),
+          Track("Synth Lead", "🎹", 5, "#cc00ff", [True, False, False, False, False, False, True, False, True, False, False, False, True, False, False, False], False),
+        ]
+        _ -> model.tracks
+      }
+
+      let effect = case model.playing {
+        True -> skred.command(compile_pattern(new_tracks, model.bpm))
+        False -> effect.none()
+      }
+
+      #(Model(..model, tracks: new_tracks), effect)
+    }
+
+    ClearAll -> {
+      let cleared_tracks = model.tracks
+        |> list.map(fn(t) { Track(..t, steps: empty_16_steps()) })
+      
+      let effect = case model.playing {
+        True -> skred.command(compile_pattern(cleared_tracks, model.bpm))
+        False -> effect.none()
+      }
+
+      #(Model(..model, tracks: cleared_tracks), effect)
+    }
+
+    OnSkredEvents(events) -> {
+      // Process incoming 60Hz event batch from C host
+      let #(new_step, triggered_voices, new_log) = list.fold(
+        over: events,
+        from: #(model.current_step, [], model.log),
+        with: fn(acc, evt) {
+          let #(cur_s, v_trigs, cur_log) = acc
+          case evt {
+            skred.PatternStep(_, s) -> {
+              #(s, v_trigs, [LogEntry("STEP", "Step " <> int.to_string(s), "seq"), ..cur_log])
+            }
+            skred.VoiceTrigger(v, _) -> {
+              #(cur_s, [v, ..v_trigs], [LogEntry("VOICE", "Trigger v" <> int.to_string(v), "voice"), ..cur_log])
+            }
+            skred.TempoChange(t) -> {
+              #(cur_s, v_trigs, [LogEntry("BPM", "Tempo " <> float.to_string(t), "tempo"), ..cur_log])
+            }
+            skred.UserEvent(id, a, _, _) -> {
+              #(cur_s, v_trigs, [LogEntry("USER", "UserEvent #" <> int.to_string(id) <> " a=" <> float.to_string(a), "user"), ..cur_log])
+            }
+            _ -> acc
+          }
+        },
+      )
+
+      // Light up pads that received VoiceTrigger events
+      let updated_pads = case triggered_voices {
+        [] -> model.pads
+        _ -> model.pads
+          |> list.map(fn(pad) {
+            case list.contains(triggered_voices, pad.voice) {
+              True -> Pad(..pad, active: True)
+              False -> Pad(..pad, active: False)
+            }
+          })
+      }
+
+      let trimmed_log = list.take(new_log, 8)
+      let new_total = model.total_events + list.length(events)
+
+      #(
+        Model(
+          ..model,
+          current_step: new_step,
+          pads: updated_pads,
+          log: trimmed_log,
+          total_events: new_total,
+        ),
+        effect.none(),
+      )
+    }
+  }
+}
+
+// =============================================================================
+// VIEW
+// =============================================================================
+
+fn view(model: Model) -> Element(Msg) {
+  html.div([attribute.class("app-container")], [
+    view_header(model),
+    view_main_layout(model),
+    view_footer(model),
+  ])
+}
+
+fn view_header(model: Model) -> Element(Msg) {
+  html.header([attribute.class("top-bar")], [
+    html.div([attribute.class("brand")], [
+      html.div([attribute.class("brand-logo")], [html.text("⬡")]),
+      html.div([attribute.class("brand-text")], [
+        html.h1([], [html.text("LUCY OSKO")]),
+        html.p([], [html.text("Gleam & Lustre Native Synthesizer • Skred Engine")]),
+      ]),
+    ]),
+
+    html.div([attribute.class("engine-status-pill")], [
+      html.span([attribute.class("status-led-pulse")], []),
+      html.span([attribute.class("status-text")], [
+        html.text("ALSA 48 kHz • 16 VOICES • 60 FPS DRAIN"),
+      ]),
+    ]),
+
+    html.div([attribute.class("transport-controls")], [
+      html.button(
+        [
+          attribute.class(case model.playing {
+            True -> "btn btn-play active"
+            False -> "btn btn-play"
+          }),
+          event.on_click(TogglePlay),
+        ],
+        [
+          html.span([attribute.class("btn-icon")], [
+            html.text(case model.playing {
+              True -> "⏹"
+              False -> "▶"
+            }),
+          ]),
+          html.span([], [
+            html.text(case model.playing {
+              True -> "STOP"
+              False -> "PLAY"
+            }),
+          ]),
+        ],
+      ),
+
+      html.div([attribute.class("tempo-box")], [
+        html.label([], [html.text("BPM")]),
+        html.input([
+          attribute.type_("range"),
+          attribute.min("60"),
+          attribute.max("180"),
+          attribute.step("1"),
+          attribute.value(int.to_string(float.round(model.bpm))),
+          event.on_input(SetBpm),
+        ]),
+        html.span([attribute.class("tempo-display")], [
+          html.text(int.to_string(float.round(model.bpm))),
+        ]),
+      ]),
+
+      html.div([attribute.class("preset-buttons")], [
+        html.button([attribute.class("btn btn-sm"), event.on_click(LoadPreset("techno"))], [html.text("909 Techno")]),
+        html.button([attribute.class("btn btn-sm"), event.on_click(LoadPreset("industrial"))], [html.text("Industrial")]),
+        html.button([attribute.class("btn btn-sm"), event.on_click(LoadPreset("synthwave"))], [html.text("Synthwave")]),
+        html.button([attribute.class("btn btn-sm btn-clear"), event.on_click(ClearAll)], [html.text("Clear")]),
+      ]),
+    ]),
+  ])
+}
+
+fn view_main_layout(model: Model) -> Element(Msg) {
+  html.div([attribute.class("content-grid")], [
+    // Left: 16-step grid sequencer
+    html.section([attribute.class("panel sequencer-panel")], [
+      html.div([attribute.class("panel-header")], [
+        html.h2([], [html.text("16-STEP SEQUENCER")]),
+        html.div([attribute.class("step-counter")], [
+          html.text("STEP " <> int.to_string(model.current_step + 1) <> " / 16"),
+        ]),
+      ]),
+      view_sequencer_grid(model),
+    ]),
+
+    // Right: MPC Pads & Synth Parameters
+    html.div([attribute.class("sidebar-column")], [
+      html.section([attribute.class("panel pads-panel")], [
+        html.div([attribute.class("panel-header")], [
+          html.h2([], [html.text("PERFORMANCE PADS")]),
+          html.span([attribute.class("badge")], [html.text("4x4 VELOCITY")]),
+        ]),
+        view_pad_grid(model),
+      ]),
+
+      html.section([attribute.class("panel synth-panel")], [
+        html.div([attribute.class("panel-header")], [
+          html.h2([], [html.text("SYNTH PARAMETERS")]),
+          html.span([attribute.class("badge")], [html.text("OPCODE MACROS")]),
+        ]),
+        view_synth_deck(model),
+      ]),
+    ]),
+  ])
+}
+
+fn view_sequencer_grid(model: Model) -> Element(Msg) {
+  html.div([attribute.class("grid-container")], [
+    // Step numbers header
+    html.div([attribute.class("grid-header-row")], [
+      html.div([attribute.class("track-info-header")], [html.text("TRACK")]),
+      html.div([attribute.class("step-indicators-row")], {
+        range(0, 15)
+        |> list.map(fn(s) {
+          let is_current = s == model.current_step
+          let is_beat = s % 4 == 0
+          html.div(
+            [
+              attribute.class(
+                "step-num"
+                <> case is_current {
+                  True -> " playhead"
+                  False -> ""
+                }
+                <> case is_beat {
+                  True -> " beat"
+                  False -> ""
+                },
+              ),
+            ],
+            [html.text(int.to_string(s + 1))],
+          )
+        })
+      }),
+    ]),
+
+    // Track rows
+    html.div(
+      [attribute.class("tracks-container")],
+      list.index_map(model.tracks, fn(track, t_idx) {
+        html.div([attribute.class("track-row")], [
+          html.div([attribute.class("track-meta")], [
+            html.span([attribute.class("track-icon")], [html.text(track.icon)]),
+            html.span([attribute.class("track-name")], [html.text(track.name)]),
+            html.button(
+              [
+                attribute.class(case track.muted {
+                  True -> "btn-mute active"
+                  False -> "btn-mute"
+                }),
+                event.on_click(ToggleMute(t_idx)),
+              ],
+              [html.text("M")],
+            ),
+          ]),
+
+          html.div([attribute.class("steps-row")], {
+            list.index_map(track.steps, fn(is_active, s_idx) {
+              let is_playhead = s_idx == model.current_step
+              let is_beat = s_idx % 4 == 0
+
+              html.button(
+                [
+                  attribute.class(
+                    "step-btn"
+                    <> case is_active {
+                      True -> " active"
+                      False -> ""
+                    }
+                    <> case is_playhead {
+                      True -> " playhead-glow"
+                      False -> ""
+                    }
+                    <> case is_beat {
+                      True -> " beat-accent"
+                      False -> ""
+                    },
+                  ),
+                  attribute.style("--accent-color", track.color),
+                  event.on_click(ToggleStep(t_idx, s_idx)),
+                ],
+                [
+                  html.span([attribute.class("step-dot")], []),
+                ],
+              )
+            })
+          }),
+        ])
+      }),
+    ),
+  ])
+}
+
+fn view_pad_grid(model: Model) -> Element(Msg) {
+  html.div([attribute.class("pads-grid")], {
+    list.map(model.pads, fn(pad) {
+      html.button(
+        [
+          attribute.class(case pad.active {
+            True -> "pad-btn active-pad"
+            False -> "pad-btn"
+          }),
+          attribute.style("--pad-color", pad.color),
+          event.on_click(TriggerPad(pad.id, pad.voice, pad.pitch)),
+        ],
+        [
+          html.div([attribute.class("pad-label")], [html.text(pad.label)]),
+          html.div([attribute.class("pad-sub")], [html.text(pad.sub)]),
+        ],
+      )
+    })
+  })
+}
+
+fn view_synth_deck(model: Model) -> Element(Msg) {
+  html.div([attribute.class("synth-controls")], [
+    html.div([attribute.class("slider-control")], [
+      html.div([attribute.class("slider-label-row")], [
+        html.label([], [html.text("CUTOFF FREQUENCY")]),
+        html.span([attribute.class("param-val")], [
+          html.text(int.to_string(float.round(model.cutoff)) <> " Hz"),
+        ]),
+      ]),
+      html.input([
+        attribute.type_("range"),
+        attribute.min("150"),
+        attribute.max("4500"),
+        attribute.step("25"),
+        attribute.value(int.to_string(float.round(model.cutoff))),
+        event.on_input(SetCutoff),
+      ]),
+    ]),
+
+    html.div([attribute.class("slider-control")], [
+      html.div([attribute.class("slider-label-row")], [
+        html.label([], [html.text("FILTER RESONANCE")]),
+        html.span([attribute.class("param-val")], [
+          html.text(int.to_string(float.round(model.resonance *. 100.0)) <> "%"),
+        ]),
+      ]),
+      html.input([
+        attribute.type_("range"),
+        attribute.min("0.05"),
+        attribute.max("0.95"),
+        attribute.step("0.02"),
+        attribute.value(float.to_string(model.resonance)),
+        event.on_input(SetResonance),
+      ]),
+    ]),
+
+    html.div([attribute.class("slider-control")], [
+      html.div([attribute.class("slider-label-row")], [
+        html.label([], [html.text("MASTER OUTPUT LEVEL")]),
+        html.span([attribute.class("param-val")], [
+          html.text(int.to_string(float.round(model.volume *. 100.0)) <> "%"),
+        ]),
+      ]),
+      html.input([
+        attribute.type_("range"),
+        attribute.min("0.1"),
+        attribute.max("1.0"),
+        attribute.step("0.05"),
+        attribute.value(float.to_string(model.volume)),
+        event.on_input(SetVolume),
+      ]),
+    ]),
+  ])
+}
+
+fn view_footer(model: Model) -> Element(Msg) {
+  html.footer([attribute.class("bottom-bar")], [
+    html.div([attribute.class("telemetry-feed")], [
+      html.span([attribute.class("telemetry-title")], [html.text("FFI TELEMETRY:")]),
+      html.div([attribute.class("log-pill-container")], {
+        list.map(model.log, fn(entry) {
+          html.span([attribute.class("log-pill log-" <> entry.kind)], [
+            html.text("[" <> entry.time <> "] " <> entry.desc),
+          ])
+        })
+      }),
+    ]),
+
+    html.div([attribute.class("stats-summary")], [
+      html.span([], [
+        html.text("Events Processed: " <> int.to_string(model.total_events)),
+      ]),
+    ]),
+  ])
+}
