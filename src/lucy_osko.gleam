@@ -129,34 +129,34 @@ pub type Msg {
 fn init(_) -> #(Model, Effect(Msg)) {
   let default_tracks = [
     Track(name: "Kick 909", icon: "🥁", voice: 0, color: "#ff3366", steps: preset_four_on_floor(), muted: False),
-    Track(name: "Snare 909", icon: "💥", voice: 1, color: "#ff9900", steps: preset_backbeat(), muted: False),
-    Track(name: "Closed Hat", icon: "⚡", voice: 2, color: "#ffea00", steps: preset_eighths(), muted: False),
-    Track(name: "Open Hat", icon: "✨", voice: 3, color: "#00e5ff", steps: preset_offbeats(), muted: False),
-    Track(name: "Bass 303", icon: "🎸", voice: 4, color: "#00ff88", steps: preset_bassline(), muted: False),
-    Track(name: "Synth Lead", icon: "🎹", voice: 5, color: "#cc00ff", steps: preset_leadline(), muted: False),
+    Track(name: "Snare 909", icon: "💥", voice: 2, color: "#ff9900", steps: preset_backbeat(), muted: False),
+    Track(name: "Closed Hat", icon: "⚡", voice: 4, color: "#ffea00", steps: preset_eighths(), muted: False),
+    Track(name: "Open Hat", icon: "✨", voice: 5, color: "#00e5ff", steps: preset_offbeats(), muted: False),
+    Track(name: "Bass 303", icon: "🎸", voice: 8, color: "#00ff88", steps: preset_bassline(), muted: False),
+    Track(name: "Synth Lead", icon: "🎹", voice: 12, color: "#cc00ff", steps: preset_leadline(), muted: False),
   ]
 
   let default_pads = [
-    // Row 1: Drums (440 Hz root playback for wave 82-86)
+    // Row 1: Drums (Dedicated voices 0..3)
     Pad(0, 0, "KICK", "909 Punch", 440.0, "#ff3366", False),
-    Pad(1, 0, "KICK TIGHT", "High Punch", 490.0, "#ff3366", False),
-    Pad(2, 1, "SNARE", "Crisp 909", 440.0, "#ff9900", False),
-    Pad(3, 7, "CLAP", "909 Clap", 440.0, "#ff9900", False),
-    // Row 2: Hats & Percussion
-    Pad(4, 2, "CH HAT", "Closed Hat", 440.0, "#ffea00", False),
-    Pad(5, 3, "OP HAT", "Open Hat", 440.0, "#00e5ff", False),
-    Pad(6, 2, "HAT ROLL", "Fast Hat", 470.0, "#ffea00", False),
-    Pad(7, 7, "CLAP HI", "Accented", 480.0, "#ff9900", False),
-    // Row 3: Bass 303 (MIDI Note numbers 36..45)
-    Pad(8, 4, "BASS C2", "MIDI 36", 36.0, "#00ff88", False),
-    Pad(9, 4, "BASS E2", "MIDI 40", 40.0, "#00ff88", False),
-    Pad(10, 4, "BASS G2", "MIDI 43", 43.0, "#00ff88", False),
-    Pad(11, 4, "BASS A2", "MIDI 45", 45.0, "#00ff88", False),
-    // Row 4: Lead Synths (MIDI Note numbers 60..71)
-    Pad(12, 5, "LEAD C4", "MIDI 60", 60.0, "#cc00ff", False),
-    Pad(13, 5, "LEAD E4", "MIDI 64", 64.0, "#cc00ff", False),
-    Pad(14, 5, "LEAD G4", "MIDI 67", 67.0, "#cc00ff", False),
-    Pad(15, 5, "LEAD B4", "MIDI 71", 71.0, "#cc00ff", False),
+    Pad(1, 1, "KICK TIGHT", "High Punch", 490.0, "#ff3366", False),
+    Pad(2, 2, "SNARE", "Crisp 909", 440.0, "#ff9900", False),
+    Pad(3, 3, "CLAP", "909 Clap", 440.0, "#ff9900", False),
+    // Row 2: Hats & Percussion (Dedicated voices 4..7)
+    Pad(4, 4, "CH HAT", "Closed Hat", 440.0, "#ffea00", False),
+    Pad(5, 5, "OP HAT", "Open Hat", 440.0, "#00e5ff", False),
+    Pad(6, 6, "HAT ROLL", "Fast Hat", 470.0, "#ffea00", False),
+    Pad(7, 7, "RIM", "808 Rimshot", 440.0, "#ff9900", False),
+    // Row 3: Bass 303 (Dedicated voices 8..11, MIDI notes 36..45)
+    Pad(8, 8, "BASS C2", "MIDI 36", 36.0, "#00ff88", False),
+    Pad(9, 9, "BASS E2", "MIDI 40", 40.0, "#00ff88", False),
+    Pad(10, 10, "BASS G2", "MIDI 43", 43.0, "#00ff88", False),
+    Pad(11, 11, "BASS A2", "MIDI 45", 45.0, "#00ff88", False),
+    // Row 4: Lead Synths (Dedicated voices 12..15, MIDI notes 60..71)
+    Pad(12, 12, "LEAD C4", "MIDI 60", 60.0, "#cc00ff", False),
+    Pad(13, 13, "LEAD E4", "MIDI 64", 64.0, "#cc00ff", False),
+    Pad(14, 14, "LEAD G4", "MIDI 67", 67.0, "#cc00ff", False),
+    Pad(15, 15, "LEAD B4", "MIDI 71", 71.0, "#cc00ff", False),
   ]
 
   let initial_model = Model(
@@ -390,19 +390,20 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 
     SetCutoff(str_val) -> {
       let cutoff = result.unwrap(float.parse(str_val), model.cutoff)
-      let cmd = "v4 k" <> float.to_string(cutoff) <> " v5 k" <> float.to_string(cutoff *. 1.5)
+      let cmd = "v8 k" <> float.to_string(cutoff) <> " v9 k" <> float.to_string(cutoff) <> " v10 k" <> float.to_string(cutoff) <> " v11 k" <> float.to_string(cutoff) <> " v12 k" <> float.to_string(cutoff *. 1.5) <> " v13 k" <> float.to_string(cutoff *. 1.5) <> " v14 k" <> float.to_string(cutoff *. 1.5) <> " v15 k" <> float.to_string(cutoff *. 1.5)
       #(Model(..model, cutoff: cutoff), skred.command(cmd))
     }
 
     SetResonance(str_val) -> {
       let res = result.unwrap(float.parse(str_val), model.resonance)
-      let cmd = "v4 q" <> float.to_string(res *. 10.0) <> " v5 q" <> float.to_string(res *. 8.0)
+      let cmd = "v8 q" <> float.to_string(res *. 10.0) <> " v9 q" <> float.to_string(res *. 10.0) <> " v10 q" <> float.to_string(res *. 10.0) <> " v11 q" <> float.to_string(res *. 10.0) <> " v12 q" <> float.to_string(res *. 8.0) <> " v13 q" <> float.to_string(res *. 8.0) <> " v14 q" <> float.to_string(res *. 8.0) <> " v15 q" <> float.to_string(res *. 8.0)
       #(Model(..model, resonance: res), skred.command(cmd))
     }
 
     SetVolume(str_val) -> {
       let vol = result.unwrap(float.parse(str_val), model.volume)
-      let cmd = "v4 a" <> float.to_string(vol *. 2.0 -. 2.0)
+      let db = float.to_string(vol *. 20.0 -. 20.0)
+      let cmd = "V " <> db
       #(Model(..model, volume: vol), skred.command(cmd))
     }
 
@@ -410,27 +411,27 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       let new_tracks = case preset_name {
         "techno" -> [
           Track("Kick 909", "🥁", 0, "#ff3366", preset_four_on_floor(), False),
-          Track("Snare 909", "💥", 1, "#ff9900", preset_backbeat(), False),
-          Track("Closed Hat", "⚡", 2, "#ffea00", preset_eighths(), False),
-          Track("Open Hat", "✨", 3, "#00e5ff", preset_offbeats(), False),
-          Track("Bass 303", "🎸", 4, "#00ff88", preset_bassline(), False),
-          Track("Synth Lead", "🎹", 5, "#cc00ff", preset_leadline(), False),
+          Track("Snare 909", "💥", 2, "#ff9900", preset_backbeat(), False),
+          Track("Closed Hat", "⚡", 4, "#ffea00", preset_eighths(), False),
+          Track("Open Hat", "✨", 5, "#00e5ff", preset_offbeats(), False),
+          Track("Bass 303", "🎸", 8, "#00ff88", preset_bassline(), False),
+          Track("Synth Lead", "🎹", 12, "#cc00ff", preset_leadline(), False),
         ]
         "industrial" -> [
           Track("Kick 909", "🥁", 0, "#ff3366", [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False], False),
-          Track("Snare 909", "💥", 1, "#ff9900", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, True, True], False),
-          Track("Closed Hat", "⚡", 2, "#ffea00", list.repeat(True, times: 16), False),
-          Track("Open Hat", "✨", 3, "#00e5ff", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False], False),
-          Track("Bass 303", "🎸", 4, "#00ff88", [True, False, False, True, False, False, True, False, False, True, False, False, True, False, True, False], False),
-          Track("Synth Lead", "🎹", 5, "#cc00ff", [False, False, True, False, True, False, False, False, False, False, True, False, True, False, False, False], False),
+          Track("Snare 909", "💥", 2, "#ff9900", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, True, True], False),
+          Track("Closed Hat", "⚡", 4, "#ffea00", list.repeat(True, times: 16), False),
+          Track("Open Hat", "✨", 5, "#00e5ff", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False], False),
+          Track("Bass 303", "🎸", 8, "#00ff88", [True, False, False, True, False, False, True, False, False, True, False, False, True, False, True, False], False),
+          Track("Synth Lead", "🎹", 12, "#cc00ff", [False, False, True, False, True, False, False, False, False, False, True, False, True, False, False, False], False),
         ]
         "synthwave" -> [
           Track("Kick 909", "🥁", 0, "#ff3366", preset_four_on_floor(), False),
-          Track("Snare 909", "💥", 1, "#ff9900", preset_backbeat(), False),
-          Track("Closed Hat", "⚡", 2, "#ffea00", preset_eighths(), False),
-          Track("Open Hat", "✨", 3, "#00e5ff", [False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False], False),
-          Track("Bass 303", "🎸", 4, "#00ff88", list.repeat(True, times: 16), False),
-          Track("Synth Lead", "🎹", 5, "#cc00ff", [True, False, False, False, False, False, True, False, True, False, False, False, True, False, False, False], False),
+          Track("Snare 909", "💥", 2, "#ff9900", preset_backbeat(), False),
+          Track("Closed Hat", "⚡", 4, "#ffea00", preset_eighths(), False),
+          Track("Open Hat", "✨", 5, "#00e5ff", [False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False], False),
+          Track("Bass 303", "🎸", 8, "#00ff88", list.repeat(True, times: 16), False),
+          Track("Synth Lead", "🎹", 12, "#cc00ff", [True, False, False, False, False, False, True, False, True, False, False, False, True, False, False, False], False),
         ]
         _ -> model.tracks
       }
@@ -606,7 +607,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
         }
       })
 
-      // 2. Collect triggered voices to light up pads
+      // 2. Collect triggered and released voices to light up / unlight pads
       let triggered_voices = list.filter_map(events, fn(item) {
         case item.event {
           skred.VoiceTrigger(v, _) -> Ok(v)
@@ -614,13 +615,24 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
         }
       })
 
-      let updated_pads = case triggered_voices {
-        [] -> model.pads
-        _ -> model.pads
+      let released_voices = list.filter_map(events, fn(item) {
+        case item.event {
+          skred.VoiceRelease(v) -> Ok(v)
+          skred.VoiceFinished(v) -> Ok(v)
+          _ -> Error(Nil)
+        }
+      })
+
+      let updated_pads = case triggered_voices, released_voices {
+        [], [] -> model.pads
+        _, _ -> model.pads
           |> list.map(fn(pad) {
             case list.contains(triggered_voices, pad.voice) {
               True -> Pad(..pad, active: True)
-              False -> Pad(..pad, active: False)
+              False -> case list.contains(released_voices, pad.voice) {
+                True -> Pad(..pad, active: False)
+                False -> pad
+              }
             }
           })
       }
@@ -1332,7 +1344,7 @@ fn view_footer(model: Model) -> Element(Msg) {
       html.span([attribute.class("status-led-pulse")], []),
       html.span([attribute.class("telemetry-title")], [html.text("SKRED ENGINE 0.79:")]),
       html.span([attribute.class("status-text")], [
-        html.text("ALSA 48 kHz • 16 VOICES • 60 FPS EVENT DRAIN • BUFFERED: " <> int.to_string(list.length(model.control_events))),
+        html.text("ALSA 48 kHz • 256 VOICES • 60 FPS EVENT DRAIN • BUFFERED: " <> int.to_string(list.length(model.control_events))),
       ]),
     ]),
 

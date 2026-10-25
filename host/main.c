@@ -237,8 +237,8 @@ static int on_webview_close(struct webview *w) {
 
 // Setup basic synth/drum presets in Skred
 static void init_synth_engine(void) {
-    // Enable voice lifecycle events on all voices 0..15
-    for (int i = 0; i < 16; i++) {
+    // Enable voice lifecycle events on voices 0..63
+    for (int i = 0; i < 64; i++) {
         char cmd[32];
         snprintf(cmd, sizeof(cmd), "v%d vc1", i);
         skred_command(cmd);
@@ -254,34 +254,47 @@ static void init_synth_engine(void) {
     // Master Tempo and 16-step grid default
     skred_command("M 124 16");
 
-    // Voice 0: Punchy Built-in 909 Kick (wave 82, boosted to a10)
+    // --- Pad / Sequencer Voices (Each has its OWN unique voice index 0..15!) ---
+    // Voice 0: Punchy Built-in 909 Kick (wave 82, 440 Hz root)
     skred_command("v0 w82 f440 a10 p 0");
 
-    // Voice 1: Snappy 909 Snare (wave 83, boosted to a10)
-    skred_command("v1 w83 f440 a10 p 0");
+    // Voice 1: Snappy Kick Tight (wave 82, tuned up to 490 Hz)
+    skred_command("v1 w82 f490 a10 p 0");
 
-    // Voice 2: Crisp Closed HiHat (wave 84, boosted to a5)
-    skred_command("v2 w84 f440 a5 p 0.2");
+    // Voice 2: Crisp 909 Snare (wave 83, 440 Hz)
+    skred_command("v2 w83 f440 a10 p 0");
 
-    // Voice 3: Sizzling Open HiHat (wave 85, boosted to a6)
-    skred_command("v3 w85 f440 a6 p -0.2");
+    // Voice 3: 909 Electronic Clap (wave 86, 440 Hz)
+    skred_command("v3 w86 f440 a10 p 0");
 
-    // Voice 4: Heavy Resonant Bass (Sawtooth w15)
-    skred_command("v4 w15 a0 t.002,.25,.2,.1 j1 k450 q6");
+    // Voice 4: Crisp Closed HiHat (wave 84, 440 Hz)
+    skred_command("v4 w84 f440 a5 p 0.2");
 
-    // Voice 5: Synth Pluck / Chord (Square w16)
-    skred_command("v5 w16 a-2 t.004,.3,.1,.15 j1 k1800 q2");
+    // Voice 5: Sizzling Open HiHat (wave 85, 440 Hz)
+    skred_command("v5 w85 f440 a6 p -0.2");
 
-    // Voice 6: Acid 303 Screamer (Saw w15 with resonant sweep)
-    skred_command("v6 w15 a0 t.002,.20,0,.06 j1,2 k600 q10 ft.001,.18,0,.06 fd2600");
+    // Voice 6: Hat Roll / Accent (wave 84, tuned up to 470 Hz)
+    skred_command("v6 w84 f470 a5 p 0.25");
 
-    // Voice 7: 909 Clap (wave 86, boosted to a10)
-    skred_command("v7 w86 f440 a10 p 0");
+    // Voice 7: 808 Rimshot / Perc (wave 87, 440 Hz)
+    skred_command("v7 w87 f440 a8 p 0.1");
+
+    // Voices 8..11: Heavy Resonant Bass 303 (Sawtooth w15, MIDI notes 36, 40, 43, 45)
+    skred_command("v8 w15 a0 t.002,.25,.2,.1 j1 k450 q6 n36");
+    skred_command("v9 w15 a0 t.002,.25,.2,.1 j1 k450 q6 n40");
+    skred_command("v10 w15 a0 t.002,.25,.2,.1 j1 k450 q6 n43");
+    skred_command("v11 w15 a0 t.002,.25,.2,.1 j1 k450 q6 n45");
+
+    // Voices 12..15: Synth Lead / Pluck (Square w16, MIDI notes 60, 64, 67, 71)
+    skred_command("v12 w16 a-2 t.004,.3,.1,.15 j1 k1800 q2 n60");
+    skred_command("v13 w16 a-2 t.004,.3,.1,.15 j1 k1800 q2 n64");
+    skred_command("v14 w16 a-2 t.004,.3,.1,.15 j1 k1800 q2 n67");
+    skred_command("v15 w16 a-2 t.004,.3,.1,.15 j1 k1800 q2 n71");
 }
 
 int main(int argc, char **argv) {
-    printf("[Lucy Osko] Starting Skred audio engine...\n");
-    if (skred_start(512, 16, 0) != 0) {
+    printf("[Lucy Osko] Starting Skred audio engine (256 voices)...\n");
+    if (skred_start(512, 256, 0) != 0) {
         fprintf(stderr, "Failed to start Skred audio engine!\n");
         return 1;
     }
