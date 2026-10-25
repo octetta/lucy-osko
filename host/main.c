@@ -279,15 +279,39 @@ int main(int argc, char **argv) {
     init_synth_engine();
     printf("[Lucy Osko] Skred engine ready (%s)\n", skred_version());
 
-    // Resolve URL to load
-    char url[PATH_MAX * 2];
+    // Resolve URL to load (find dist/index.html relative to exe or cwd)
+    char url[PATH_MAX * 2] = {0};
     if (argc > 1 && strstr(argv[1], "://")) {
         snprintf(url, sizeof(url), "%s", argv[1]);
     } else {
-        char cwd[PATH_MAX];
-        if (getcwd(cwd, sizeof(cwd))) {
-            snprintf(url, sizeof(url), "file://%s/dist/index.html", cwd);
-        } else {
+        char candidate[PATH_MAX * 2] = {0};
+        char exe_path[PATH_MAX] = {0};
+        ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+        if (len > 0) {
+            exe_path[len] = '\0';
+            char *last_slash = strrchr(exe_path, '/');
+            if (last_slash) {
+                *last_slash = '\0'; // strip binary name
+                // Check exe_dir/../dist/index.html
+                snprintf(candidate, sizeof(candidate), "%s/../dist/index.html", exe_path);
+                char resolved[PATH_MAX];
+                if (realpath(candidate, resolved) && access(resolved, R_OK) == 0) {
+                    snprintf(url, sizeof(url), "file://%s", resolved);
+                }
+            }
+        }
+
+        if (!url[0]) {
+            char cwd[PATH_MAX];
+            if (getcwd(cwd, sizeof(cwd))) {
+                snprintf(candidate, sizeof(candidate), "%s/dist/index.html", cwd);
+                if (access(candidate, R_OK) == 0) {
+                    snprintf(url, sizeof(url), "file://%s", candidate);
+                }
+            }
+        }
+
+        if (!url[0]) {
             snprintf(url, sizeof(url), "file://dist/index.html");
         }
     }

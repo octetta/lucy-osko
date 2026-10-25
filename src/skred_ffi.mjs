@@ -3,6 +3,31 @@
 let currentSubscription = null;
 let commandResponseSubscription = null;
 
+function invokeNative(action, payload) {
+  const obj = Object.assign({ action: action }, payload);
+  const jsonStr = JSON.stringify(obj);
+  
+  if (window.external && typeof window.external.invoke === "function") {
+    try {
+      window.external.invoke(jsonStr);
+      return true;
+    } catch (e) {
+      console.warn("window.external.invoke failed:", e);
+    }
+  }
+  
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.external) {
+    try {
+      window.webkit.messageHandlers.external.postMessage(jsonStr);
+      return true;
+    } catch (e) {
+      console.warn("window.webkit.messageHandlers.external.postMessage failed:", e);
+    }
+  }
+  
+  return false;
+}
+
 export function subscribe_events(on_batch) {
   currentSubscription = on_batch;
   
@@ -44,10 +69,14 @@ export function subscribe_command_responses(on_response) {
   };
 }
 
+export function send_command(cmd) {
+  if (!invokeNative("cmd", { text: cmd })) {
+    console.log("[Skred Host Mock] cmd:", cmd);
+  }
+}
+
 export function send_command_eval(cmd) {
-  if (window.external && window.external.invoke) {
-    window.external.invoke(JSON.stringify({ action: "cmd_eval", text: cmd }));
-  } else {
+  if (!invokeNative("cmd_eval", { text: cmd })) {
     console.log("[Skred Host Mock Eval]:", cmd);
     setTimeout(() => {
       if (commandResponseSubscription) {
@@ -60,7 +89,6 @@ export function send_command_eval(cmd) {
         else if (cmd.includes("puts")) mockOutput = "# " + cmd.replace(/[\[\]]/g, "").replace("puts", "").trim() + "\n";
         else if (cmd.startsWith("ce")) {
           mockOutput = "# emitted user event: " + cmd + "\n";
-          // Also echo user event into mock event stream
           simulate_mock_event({ t: 4, seq: 100, v: -1, p: -1, s: -1, id: 42, vals: [1.0, 2.0, 3.0] });
         }
         commandResponseSubscription({ cmd: cmd, ret: 0, response: mockOutput });
@@ -69,47 +97,24 @@ export function send_command_eval(cmd) {
   }
 }
 
-export function send_command(cmd) {
-  if (window.skred && window.skred.command) {
-    window.skred.command(cmd);
-  } else if (window.external && window.external.invoke) {
-    window.external.invoke(JSON.stringify({ action: "cmd", text: cmd }));
-  } else {
-    console.log("[Skred Host Mock] cmd:", cmd);
-  }
-}
-
 export function send_trigger(voice, velocity) {
-  if (window.skred && window.skred.trigger) {
-    window.skred.trigger(voice, velocity);
-  } else if (window.external && window.external.invoke) {
-    window.external.invoke(JSON.stringify({ action: "trig", voice: voice, vel: velocity }));
-  } else {
+  if (!invokeNative("trig", { voice: voice, vel: velocity })) {
     console.log("[Skred Host Mock] trig:", voice, velocity);
-    // Simulate echo event in mock browser mode for testing UI without C host
-    simulate_mock_event({ t: 1, v: voice, p: -1, s: -1, id: 0, vals: [velocity, 0, 0] });
+    simulate_mock_event({ t: 1, seq: 0, v: voice, p: -1, s: -1, id: 0, vals: [velocity, 0, 0] });
   }
 }
 
 export function send_trigger_pitch(voice, pitch, velocity) {
-  if (window.skred && window.skred.triggerPitch) {
-    window.skred.triggerPitch(voice, pitch, velocity);
-  } else if (window.external && window.external.invoke) {
-    window.external.invoke(JSON.stringify({ action: "trig_p", voice: voice, pitch: pitch, vel: velocity }));
-  } else {
+  if (!invokeNative("trig_p", { voice: voice, pitch: pitch, vel: velocity })) {
     console.log("[Skred Host Mock] trig_pitch:", voice, pitch, velocity);
-    simulate_mock_event({ t: 1, v: voice, p: -1, s: -1, id: 0, vals: [velocity, pitch, 0] });
+    simulate_mock_event({ t: 1, seq: 0, v: voice, p: -1, s: -1, id: 0, vals: [velocity, pitch, 0] });
   }
 }
 
 export function send_release(voice) {
-  if (window.skred && window.skred.release) {
-    window.skred.release(voice);
-  } else if (window.external && window.external.invoke) {
-    window.external.invoke(JSON.stringify({ action: "rel", voice: voice }));
-  } else {
+  if (!invokeNative("rel", { voice: voice })) {
     console.log("[Skred Host Mock] release:", voice);
-    simulate_mock_event({ t: 2, v: voice, p: -1, s: -1, id: 0, vals: [0, 0, 0] });
+    simulate_mock_event({ t: 2, seq: 0, v: voice, p: -1, s: -1, id: 0, vals: [0, 0, 0] });
   }
 }
 

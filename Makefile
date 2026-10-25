@@ -26,7 +26,8 @@ build: frontend host
 frontend:
 	$(MISE) gleam build --target javascript
 	@mkdir -p $(DIST_DIR)
-	$(MISE) npx --yes esbuild build/dev/javascript/lucy_osko/lucy_osko.mjs --bundle --minify --format=iife --outfile=$(DIST_DIR)/app.min.js
+	@cp src/entry.mjs build/dev/javascript/lucy_osko/entry.mjs
+	$(MISE) npx --yes esbuild build/dev/javascript/lucy_osko/entry.mjs --bundle --minify --format=iife --outfile=$(DIST_DIR)/app.min.js
 
 # 2. Compile native C webview host
 host: $(TARGET)

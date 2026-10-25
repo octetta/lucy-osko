@@ -4,6 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Lucy Osko — Gleam & Lustre Synthesizer</title>
+  <script>
+    if (!window.external) {
+      window.external = {
+        invoke: function(x) {
+          if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.external) {
+            window.webkit.messageHandlers.external.postMessage(x);
+          }
+        }
+      };
+    }
+  </script>
   <style>
     :root {
       --bg-dark: #0a0d13;

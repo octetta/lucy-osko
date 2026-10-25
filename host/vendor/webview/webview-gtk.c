@@ -148,21 +148,24 @@ WEBVIEW_API int webview_init(struct webview *w) {
     g_object_ref(w->priv.webview); // work around core dump
   }
 
+  WebKitSettings *settings =
+      webkit_web_view_get_settings(WEBKIT_WEB_VIEW(w->priv.webview));
+  webkit_settings_set_enable_javascript(settings, TRUE);
+  webkit_settings_set_allow_file_access_from_file_urls(settings, TRUE);
+  webkit_settings_set_allow_universal_access_from_file_urls(settings, TRUE);
+  if (w->debug) {
+    webkit_settings_set_enable_write_console_messages_to_stdout(settings, TRUE);
+    webkit_settings_set_enable_developer_extras(settings, TRUE);
+  } else {
+    g_signal_connect(G_OBJECT(w->priv.webview), "context-menu",
+                     G_CALLBACK(webview_context_menu_cb), w);
+  }
+
   webkit_web_view_load_uri(WEBKIT_WEB_VIEW(w->priv.webview),
                            webview_check_url(w->url));
   g_signal_connect(G_OBJECT(w->priv.webview), "load-changed",
                    G_CALLBACK(webview_load_changed_cb), w);
   gtk_container_add(GTK_CONTAINER(w->priv.scroller), w->priv.webview);
-
-  if (w->debug) {
-    WebKitSettings *settings =
-        webkit_web_view_get_settings(WEBKIT_WEB_VIEW(w->priv.webview));
-    webkit_settings_set_enable_write_console_messages_to_stdout(settings, true);
-    webkit_settings_set_enable_developer_extras(settings, true);
-  } else {
-    g_signal_connect(G_OBJECT(w->priv.webview), "context-menu",
-                     G_CALLBACK(webview_context_menu_cb), w);
-  }
 
   gtk_widget_show_all(w->priv.window);
 
