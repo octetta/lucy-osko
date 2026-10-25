@@ -191,13 +191,16 @@ fn init(_) -> #(Model, Effect(Msg)) {
     total_events: 0,
   )
 
-  // Start subscriptions to Skred C host events and command responses
+  // Start subscriptions to Skred C host events and command responses,
+  // and immediately compile and populate pattern y0 in Skred!
+  let initial_pattern = compile_pattern(default_tracks, 124.0)
   #(
     initial_model,
     effect.batch([
       skred.subscribe_control_plane(OnControlPlaneEvents),
       skred.subscribe_command_responses(OnCommandResult),
-      skred.execute_command("/a?"),
+      skred.command(initial_pattern),
+      skred.execute_command("z?"),
     ]),
   )
 }
@@ -265,13 +268,13 @@ fn compile_pattern(tracks: List(Track), bpm: Float) -> String {
         |> string.join(" ")
 
       case active_voices {
-        "" -> ""
+        "" -> "[] x" <> int.to_string(step_idx) <> "\n"
         triggers -> "[" <> triggers <> "] x" <> int.to_string(step_idx) <> "\n"
       }
     })
     |> string.concat
 
-  header <> step_commands <> "[=15,0] x15\n"
+  header <> step_commands
 }
 
 // =============================================================================
@@ -332,14 +335,18 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           }
         })
 
+      let pattern_cmd = compile_pattern(updated_tracks, model.bpm)
       let side_effect = case model.playing {
-        True -> skred.command(compile_pattern(updated_tracks, model.bpm))
+        True -> skred.command(pattern_cmd)
         False -> {
           let track = get_at(updated_tracks, track_idx) |> result.unwrap(Track("", "", 0, "", [], False))
           let step_on = get_at(track.steps, step_idx) |> result.unwrap(False)
           case step_on {
-            True -> skred.trigger(track.voice, 0.85)
-            False -> effect.none()
+            True -> effect.batch([
+              skred.command(pattern_cmd),
+              skred.trigger(track.voice, 0.95),
+            ])
+            False -> skred.command(pattern_cmd)
           }
         }
       }
@@ -356,12 +363,8 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           }
         })
 
-      let effect = case model.playing {
-        True -> skred.command(compile_pattern(updated_tracks, model.bpm))
-        False -> effect.none()
-      }
-
-      #(Model(..model, tracks: updated_tracks), effect)
+      let pattern_cmd = compile_pattern(updated_tracks, model.bpm)
+      #(Model(..model, tracks: updated_tracks), skred.command(pattern_cmd))
     }
 
     TriggerPad(pad_id, voice, pitch) -> {
@@ -436,24 +439,16 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
         _ -> model.tracks
       }
 
-      let effect = case model.playing {
-        True -> skred.command(compile_pattern(new_tracks, model.bpm))
-        False -> effect.none()
-      }
-
-      #(Model(..model, tracks: new_tracks), effect)
+      let pattern_cmd = compile_pattern(new_tracks, model.bpm)
+      #(Model(..model, tracks: new_tracks), skred.command(pattern_cmd))
     }
 
     ClearAll -> {
       let cleared_tracks = model.tracks
         |> list.map(fn(t) { Track(..t, steps: empty_16_steps()) })
       
-      let effect = case model.playing {
-        True -> skred.command(compile_pattern(cleared_tracks, model.bpm))
-        False -> effect.none()
-      }
-
-      #(Model(..model, tracks: cleared_tracks), effect)
+      let pattern_cmd = compile_pattern(cleared_tracks, model.bpm)
+      #(Model(..model, tracks: cleared_tracks), skred.command(pattern_cmd))
     }
 
     // --- REPL Console ---

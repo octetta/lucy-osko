@@ -24,9 +24,24 @@ static int json_get_string(const char *json, const char *key, char *out, size_t 
     if (!pos) return 0;
     pos += strlen(needle);
     size_t i = 0;
-    while (*pos && *pos != '\"' && i < out_size - 1) {
-        if (*pos == '\\' && *(pos + 1)) pos++; // skip escape
-        out[i++] = *pos++;
+    while (*pos && i < out_size - 1) {
+        if (*pos == '\"') {
+            break; // unescaped quote ends string
+        }
+        if (*pos == '\\') {
+            pos++;
+            if (!*pos) break;
+            if (*pos == 'n') out[i++] = '\n';
+            else if (*pos == 'r') out[i++] = '\r';
+            else if (*pos == 't') out[i++] = '\t';
+            else if (*pos == '\"') out[i++] = '\"';
+            else if (*pos == '\\') out[i++] = '\\';
+            else if (*pos == '/') out[i++] = '/';
+            else out[i++] = *pos;
+            pos++;
+        } else {
+            out[i++] = *pos++;
+        }
     }
     out[i] = '\0';
     return 1;
@@ -128,21 +143,21 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
     }
 
     if (strcmp(action, "cmd") == 0) {
-        char cmd[1024] = {0};
+        char cmd[16384] = {0};
         if (json_get_string(arg, "text", cmd, sizeof(cmd))) {
             skred_command(cmd);
         }
     } else if (strcmp(action, "cmd_eval") == 0) {
-        char cmd[1024] = {0};
+        char cmd[16384] = {0};
         if (json_get_string(arg, "text", cmd, sizeof(cmd))) {
             skred_logger(1);
             int ret = skred_command(cmd);
             char *log = skred_log();
 
-            char esc_cmd[1024];
+            char esc_cmd[4096];
             json_escape(cmd, esc_cmd, sizeof(esc_cmd));
 
-            char esc_resp[8192];
+            char esc_resp[16384];
             if (log && *log) {
                 json_escape(log, esc_resp, sizeof(esc_resp));
             } else {
