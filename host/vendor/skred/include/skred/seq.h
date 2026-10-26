@@ -6,7 +6,6 @@
 #define SEQ_FRAMES_PER_CALLBACK (128)
 
 #define PATTERNS_MAX (128)
-#define SEQ_STEPS_MAX (128)
 #define STEP_MAX (256)
 
 enum {
@@ -60,6 +59,7 @@ uint64_t seq_master_tick(void);
 void pattern_reset(int p);
 int queue_event(uint64_t when, const event_t *event, int tag);
 int tempo_set_subdivision(float bpm, float subdivision);
+int tempo_set_subdivision_locked(float bpm, float subdivision, int in_audio_thread);
 int tempo_set(float bpm);
 float tempo_bpm_get(void);
 float tempo_subdivision_get(void);
@@ -107,8 +107,8 @@ extern int seq_pending_state[PATTERNS_MAX];
 extern int seq_mute[PATTERNS_MAX];
 extern int seq_control_events[PATTERNS_MAX];
 extern int seq_pattern_length[PATTERNS_MAX];
-extern char seq_pattern[PATTERNS_MAX][SEQ_STEPS_MAX][STEP_MAX];
-extern event_program_t seq_program[PATTERNS_MAX][SEQ_STEPS_MAX];
+const char *seq_step_source(int pattern, int step);
+const event_program_t *seq_step_program(int pattern, int step);
 
 #define TEXT_MAX (32+1)
 typedef char text_t[TEXT_MAX];

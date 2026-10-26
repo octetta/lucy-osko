@@ -9,7 +9,7 @@ if (typeof document !== "undefined") {
         main();
         console.log("[ENTRY] main() finished successfully! #app has children:", document.querySelector("#app") ? document.querySelector("#app").children.length : 0);
       } catch (err) {
-        console.error("[Lucy Osko] Failed to start Lustre app:", err);
+        console.error("[LUCY+OSKO] Failed to start Lustre app:", err);
       }
     });
   } else {
@@ -18,7 +18,7 @@ if (typeof document !== "undefined") {
       main();
       console.log("[ENTRY] main() finished successfully! #app has children:", document.querySelector("#app") ? document.querySelector("#app").children.length : 0);
     } catch (err) {
-      console.error("[Lucy Osko] Failed to start Lustre app:", err);
+      console.error("[LUCY+OSKO] Failed to start Lustre app:", err);
     }
   }
 }

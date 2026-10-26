@@ -1,4 +1,4 @@
-# Lucy Osko ⬡
+# LUCY+OSKO ⬡
 
 > **A premier dual-target showcase for Gleam + Lustre**: Run as a **native desktop application** embedded in a lightweight C [`webview.h`](https://github.com/webview/webview) container with ALSA audio, or run as a **zero-install Web application** powered by [`Skred`](https://github.com/octetta/pulp) compiled to **WebAssembly (WASM)** and Web Audio.
 
@@ -6,7 +6,7 @@
 
 ## 🌟 Overview
 
-**Lucy Osko** demonstrates a state-of-the-art architecture for the Gleam and Lustre communities: **a single, 100% shared Elm Architecture (TEA) frontend that compiles to an 89 KB JavaScript bundle and runs identically on both native desktop and the web.**
+**LUCY+OSKO** demonstrates a state-of-the-art architecture for the Gleam and Lustre communities: **a single, 100% shared Elm Architecture (TEA) frontend that compiles to an 89 KB JavaScript bundle and runs identically on both native desktop and the web.**
 
 ```
                         ┌───────────────────────────────┐
@@ -33,6 +33,7 @@
 - **Dual Runtime Targets**:
   1. **Native Desktop (`bin/lucy-osko`)**: Native C + WebKitGTK container with sub-millisecond ALSA stereo audio at 48 kHz.
   2. **Web Browser (`dist/index.html`)**: Zero-install static web application powered by `skred_api.wasm` and Web Audio AudioWorklet.
+- **Standalone Build (Zero Local Pulp Dependency)**: Assets are fetched directly from GitHub Releases (`octetta/pulp`) pinned by `SKRED_VERSION`.
 - **256 Polyphonic Voices**: Maxed-out polyphonic sound generation with customizable ADSR envelopes, waveshapers, filters, and patterns.
 - **Interactive Skode REPL Console**: ASCII command terminal with instant **`Enter` key execution**, return code badges, formatted multi-line engine log responses, and **`↑` / `↓` command history navigation**.
 - **Configurable 4x4 Performance Pads**: Velocity pad grid with customizable pitch, voice assignment, accent colors, and custom Skode command overrides with independent **`Enter` submission and arrow history cycling**.
@@ -47,11 +48,11 @@
 
 ### Solving the Native & Web Boundary
 
-In Lustre, external asynchronous event streams are handled via **managed effects** using `effect.from(fn(dispatch) { ... })`. Lucy Osko uses a unified FFI bridge ([`src/skred_ffi.mjs`](file:///home/stewartj/book/lucy-osko/src/skred_ffi.mjs)) that auto-detects its host environment at launch:
+In Lustre, external asynchronous event streams are handled via **managed effects** using `effect.from(fn(dispatch) { ... })`. LUCY+OSKO uses a unified FFI bridge ([`src/skred_ffi.mjs`](file:///home/stewartj/book/lucy-osko/src/skred_ffi.mjs)) that auto-detects its host environment at launch:
 
 1. **Desktop Host (C / WebKitGTK)**:
    * Uses WebKit IPC (`window.webkit.messageHandlers.external.postMessage`) to deliver commands directly to the C audio thread.
-   * A C background thread drains Skred's lock-free ring buffer (`skred_control_event_t`) at 60 Hz and dispatches batched JSON arrays onto the GTK main loop thread using `webview_dispatch()`.
+   * Direct non-blocking event-loop integration: hooks `skred_control_event_wait_fd()` into the GTK event loop via `g_io_add_watch()` to drain events at 60 FPS without worker threads or recursive iterations.
 2. **Web Browser (WebAssembly / Web Audio)**:
    * Uses direct in-memory calls into `skred_api.wasm` (`Module.ccall('skred_command', ...)`).
    * Automatically unlocks Web Audio on the first user interaction (pointer or key press) to comply with browser autoplay policies.
@@ -78,6 +79,7 @@ lucy-osko/
 │       ├── webview/              # Single-header webview.h + webview-gtk.c
 │       └── skred/                # Skred headers and static library (libapi.a)
 ├── scripts/
+│   ├── fetch_skred.py            # Automated GitHub release asset downloader
 │   └── serve.py                  # Local HTTP server with COOP/COEP headers
 ├── src/                          # Gleam & Lustre application source
 │   ├── lucy_osko.gleam           # Main Lustre app (Model, Msg, Update, View)
@@ -85,6 +87,7 @@ lucy-osko/
 │   └── skred_ffi.mjs             # Unified FFI bridge (Desktop + WASM auto-detect)
 ├── test/                         # Unit tests
 │   └── lucy_osko_test.gleam      # Gleeunit tests for MVU, Enter submission & history
+├── SKRED_VERSION                 # Pinned Skred audio engine version (e.g. 0.79.1)
 ├── gleam.toml                    # Gleam package configuration
 ├── Makefile                      # Dual-target build & run workflow
 └── mise.toml                     # Toolchain configuration (Erlang, Gleam, Node)
@@ -96,7 +99,7 @@ lucy-osko/
 
 ### Prerequisites
 - Linux with `pkg-config`, `gtk+-3.0`, `webkit2gtk-4.0` (or `4.1`), `alsa`, and `gcc` (for Desktop target).
-- Python 3 (for serving the Web target locally).
+- Python 3 (for fetching release assets and serving the Web target locally).
 - Toolchain managed automatically via [`mise`](https://mise.jdx.dev/):
   - Erlang `29.0.5`
   - Gleam `1.19.2`
@@ -110,7 +113,7 @@ lucy-osko/
 ```bash
 make desktop
 ```
-Compiles the Gleam frontend to `dist/app.min.js` and links the native C host with `libapi.a` and WebKitGTK into `bin/lucy-osko`.
+Compiles the Gleam frontend to `dist/app.min.js`, pulls the matching Skred release from GitHub if needed, and links the native C host with `libapi.a` and WebKitGTK into `bin/lucy-osko`.
 
 #### 2. Run Desktop Application
 ```bash
@@ -126,7 +129,7 @@ Launches the native window with hard real-time ALSA audio rendering at 48 kHz!
 ```bash
 make web
 ```
-Compiles the Gleam frontend and syncs `skred_api.js` and `skred_api.wasm` into `dist/`.
+Compiles the Gleam frontend and ensures `skred_api.js` and `skred_api.wasm` are synchronized in `dist/`.
 
 #### 2. Serve Locally with WebAssembly Support
 ```bash
@@ -163,52 +166,35 @@ Executes the Gleeunit test suite verifying:
 
 ---
 
-## 🔄 Updating the Skred Audio Engine Version
+## 🔄 Managing the Skred Engine Version
 
-The Skred audio engine is vendored into `lucy-osko` from the sibling repository [`pulp`](file:///home/stewartj/book/pulp). Follow this procedure whenever a new Skred release or build is prepared:
+The build system is **completely standalone** and does **not** depend on a local `pulp` repository checkout. Precompiled release binaries and WASM assets are pulled directly from GitHub Releases ([`octetta/pulp`](https://github.com/octetta/pulp/releases)).
 
-### 1. Source of Truth
-The version string is defined centrally in `pulp/VERSION`:
-```bash
-cat ../pulp/VERSION
-# e.g., 0.79.1
+### 1. Pinned Version (`SKRED_VERSION`)
+The version number is specified in the [`SKRED_VERSION`](file:///home/stewartj/book/lucy-osko/SKRED_VERSION) file in the root of the repository:
+```text
+0.79.1
 ```
 
-### 2. Rebuild the Native Static Library (`libapi.a`)
-Generate `skred-version.h` and compile the native static library with CMake:
+### 2. Fetching Engine Assets
+To download or update the native libraries (`libapi.a`, headers) and WebAssembly runtime (`skred_api.js`, `skred_api.wasm`) for the pinned version:
 ```bash
-cd ../pulp/parts/build_native
-cmake ..
-make -j4
-cd ../../../lucy-osko
+make fetch-skred
 ```
+*(Or specify a custom version directly on the command line: `make fetch-skred SKRED_VERSION=0.79.1`)*.
 
-### 3. Rebuild the WebAssembly Engine (`skred_api.js` & `skred_api.wasm`)
-Compile the WASM runtime with Emscripten via mise:
-```bash
-cd ../pulp/parts/build_wasm
-mise exec -- ./mkwasm
-cd ../../../lucy-osko
-```
+The fetch script (`scripts/fetch_skred.py`):
+1. Detects your host platform architecture (`linux-x86_64`, `linux-aarch64`, `linux-armhf`, `macos-universal`, etc.).
+2. Downloads the official release archive `skred-<version>-maxed-<platform>.tar.gz` and extracts `libapi.a` and all C headers to `host/vendor/skred/`.
+3. Downloads `skred-<version>-maxed-wasm.zip` and extracts `skred_api.js` and `skred_api.wasm` to `dist/`.
+4. Writes a version stamp to `host/vendor/skred/.skred_version` so subsequent builds avoid redundant downloads.
 
-### 4. Sync Vendored Artifacts into Lucy Osko
-Use the built-in Makefile target to copy all native headers, static library, and WASM bundles:
-```bash
-make sync-skred
-```
-This updates:
-* `host/vendor/skred/lib/libapi.a`
-* `host/vendor/skred/include/skred/skred-version.h`
-* `host/vendor/skred/include/skred/api.h`
-* `dist/skred_api.js`
-* `dist/skred_api.wasm`
-
-### 5. Update Version Strings & Rebuild
-If updating default REPL banner or status bar telemetry text, update `src/lucy_osko.gleam` accordingly, then compile and test:
-```bash
-make build
-mise exec -- gleam test
-```
+### 3. Upgrading to a New Version
+To upgrade LUCY+OSKO to a new Skred release:
+1. Update [`SKRED_VERSION`](file:///home/stewartj/book/lucy-osko/SKRED_VERSION) with the new version string (e.g. `0.80.0`).
+2. Run `make fetch-skred`.
+3. Update default REPL and telemetry version strings in [`src/lucy_osko.gleam`](file:///home/stewartj/book/lucy-osko/src/lucy_osko.gleam) if desired.
+4. Run `make build && mise exec -- gleam test`.
 
 ---
 

@@ -303,14 +303,14 @@ static void init_synth_engine(void) {
 }
 
 int main(int argc, char **argv) {
-    printf("[Lucy Osko] Starting Skred audio engine (256 voices)...\n");
+    printf("[LUCY+OSKO] Starting Skred audio engine (256 voices)...\n");
     if (skred_start(512, 256, 0) != 0) {
         fprintf(stderr, "Failed to start Skred audio engine!\n");
         return 1;
     }
 
     init_synth_engine();
-    printf("[Lucy Osko] Skred engine ready (%s)\n", skred_version());
+    printf("[LUCY+OSKO] Skred engine ready (%s)\n", skred_version());
 
     // Resolve URL to load (find dist/index.html relative to exe or cwd)
     char url[PATH_MAX * 2] = {0};
@@ -348,10 +348,10 @@ int main(int argc, char **argv) {
             snprintf(url, sizeof(url), "file://dist/index.html");
         }
     }
-    printf("[Lucy Osko] Loading UI: %s\n", url);
+    printf("[LUCY+OSKO] Loading UI: %s\n", url);
 
     memset(&g_webview, 0, sizeof(g_webview));
-    g_webview.title = "Lucy Osko — Gleam & Lustre + Skred Synth";
+    g_webview.title = "LUCY+OSKO — Gleam & Lustre + Skred Synth";
     g_webview.url = url;
     g_webview.width = 1180;
     g_webview.height = 840;
@@ -382,7 +382,7 @@ int main(int argc, char **argv) {
     while (g_running && webview_loop(&g_webview, 1) == 0) {
     }
 
-    printf("[Lucy Osko] Shutting down...\n");
+    printf("[LUCY+OSKO] Shutting down...\n");
     g_running = 0;
     skred_stop();
     webview_exit(&g_webview);

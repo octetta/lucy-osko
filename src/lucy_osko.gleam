@@ -1,4 +1,4 @@
-//// Lucy Osko: Community showcase for Gleam + Lustre running on a native C / webview.h host
+//// LUCY+OSKO: Community showcase for Gleam + Lustre running on a native C / webview.h host
 //// with hard real-time bidirectional FFI communication to the Skred audio synthesizer engine,
 //// featuring configurable 4x4 velocity performance pads, interactive Skode REPL console,
 //// and live Control Plane event inspector.
@@ -1109,7 +1109,7 @@ fn view_top_bar(model: Model) -> Element(Msg) {
     html.div([attribute.class("brand")], [
       html.div([attribute.class("brand-logo")], [html.text("⬡")]),
       html.div([attribute.class("brand-text")], [
-        html.h1([], [html.text("LUCY OSKO")]),
+        html.h1([], [html.text("LUCY+OSKO")]),
         html.p([], [
           html.text("Gleam & Lustre Native Synthesizer • Skred Engine"),
         ]),

@@ -19,8 +19,8 @@ def main():
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=directory, **kwargs)
             
-    print(f"[Lucy Osko Web] Server running at http://localhost:{port}")
-    print(f"[Lucy Osko Web] Serving '{directory}' with COOP/COEP headers enabled for Wasm pthreads.")
+    print(f"[LUCY+OSKO Web] Server running at http://localhost:{port}")
+    print(f"[LUCY+OSKO Web] Serving '{directory}' with COOP/COEP headers enabled for Wasm pthreads.")
     print("Press Ctrl+C to stop.")
     server.test(HandlerClass=DirectoryHandler, port=port)
 
