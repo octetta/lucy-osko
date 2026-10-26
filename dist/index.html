@@ -1043,46 +1043,48 @@
       }
     }, { capture: true, passive: true });
 
+    function releaseBtn(btn) {
+      if (!btn) return;
+      btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new CustomEvent("pad-release", { bubbles: true, cancelable: true }));
+    }
+
     function handleTouchEnd(e) {
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
         const btn = activeTouches.get(touch.identifier);
         if (btn) {
           activeTouches.delete(touch.identifier);
-          btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+          releaseBtn(btn);
         }
       }
       if (!e.touches || e.touches.length === 0) {
         activeTouches.clear();
-        document.querySelectorAll(".pad-btn.active-pad").forEach((btn) => {
-          btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
-        });
+        document.querySelectorAll(".pad-btn.active-pad").forEach(releaseBtn);
       }
     }
 
     window.addEventListener("touchend", handleTouchEnd, { passive: true, capture: true });
     window.addEventListener("touchcancel", handleTouchEnd, { passive: true, capture: true });
 
-    // 2. Pointer event tracking (without capture)
+    // 2. Pointer & Mouse event tracking
     window.addEventListener("pointerup", (e) => {
       if (e.pointerType === "mouse" && e.buttons === 0) {
-        document.querySelectorAll(".pad-btn.active-pad").forEach((btn) => {
-          btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
-        });
+        document.querySelectorAll(".pad-btn.active-pad").forEach(releaseBtn);
       }
     }, { capture: true, passive: true });
 
+    window.addEventListener("mouseup", () => {
+      document.querySelectorAll(".pad-btn.active-pad").forEach(releaseBtn);
+    }, { capture: true, passive: true });
+
     window.addEventListener("pointercancel", () => {
-      document.querySelectorAll(".pad-btn.active-pad").forEach((btn) => {
-        btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
-      });
+      document.querySelectorAll(".pad-btn.active-pad").forEach(releaseBtn);
     }, { capture: true, passive: true });
 
     window.addEventListener("blur", () => {
       activeTouches.clear();
-      document.querySelectorAll(".pad-btn.active-pad").forEach((btn) => {
-        btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
-      });
+      document.querySelectorAll(".pad-btn.active-pad").forEach(releaseBtn);
     });
   </script>
 </body>

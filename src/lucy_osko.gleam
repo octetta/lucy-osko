@@ -1306,6 +1306,8 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
             event.on("pointercancel", decode.success(ReleasePad(pad.id))),
             event.on("touchend", decode.success(ReleasePad(pad.id))),
             event.on("touchcancel", decode.success(ReleasePad(pad.id))),
+            event.on("mouseup", decode.success(ReleasePad(pad.id))),
+            event.on("pad-release", decode.success(ReleasePad(pad.id))),
           ],
         [
           html.div([attribute.class("pad-top-row")], [

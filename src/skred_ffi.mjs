@@ -56,6 +56,7 @@ function resumeAudioContext(M) {
 }
 
 function ensureWasmEngine() {
+  if (isNativeDesktop()) return;
   const M = getWasmModule();
   if (!M) return;
 
@@ -208,10 +209,12 @@ export function subscribe_events(on_batch) {
     }
   };
 
-  // If WASM module is ready, start event pump immediately
-  const M = getWasmModule();
-  if (M) {
-    startWasmEventPump(M);
+  // If WASM module is ready and we are not in native desktop, start event pump immediately
+  if (!isNativeDesktop()) {
+    const M = getWasmModule();
+    if (M) {
+      startWasmEventPump(M);
+    }
   }
 
   return function() {

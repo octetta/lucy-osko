@@ -105,26 +105,38 @@ static void json_escape(const char *src, char *out, size_t out_max) {
     out[j] = '\0';
 }
 
-// Dispatched to GTK main loop thread for command response
+// Dispatched to GTK main loop thread for command response (non-blocking async)
 static void on_dispatch_cmd_response(struct webview *w, void *arg) {
     char *json = (char *)arg;
     if (json) {
         char *script = NULL;
         if (asprintf(&script, "window.__skred_on_command_response && window.__skred_on_command_response(%s);", json) != -1) {
-            webview_eval(w, script);
+            if (w && w->priv.webview) {
+#if WEBKIT_CHECK_VERSION(2, 40, 0)
+                webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, -1, NULL, NULL, NULL, NULL, NULL);
+#else
+                webkit_web_view_run_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, NULL, NULL, NULL);
+#endif
+            }
             free(script);
         }
         free(json);
     }
 }
 
-// Dispatched to GTK main loop thread for event batch
+// Dispatched to GTK main loop thread for event batch (non-blocking async)
 static void on_dispatch_batch(struct webview *w, void *arg) {
     char *json = (char *)arg;
     if (json) {
         char *script = NULL;
         if (asprintf(&script, "window.__skred_dispatch_batch && window.__skred_dispatch_batch(%s);", json) != -1) {
-            webview_eval(w, script);
+            if (w && w->priv.webview) {
+#if WEBKIT_CHECK_VERSION(2, 40, 0)
+                webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, -1, NULL, NULL, NULL, NULL, NULL);
+#else
+                webkit_web_view_run_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, NULL, NULL, NULL);
+#endif
+            }
             free(script);
         }
         free(json);
