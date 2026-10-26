@@ -377,7 +377,7 @@ pub fn init(_) -> #(Model, Effect(Msg)) {
         CommandHistoryEntry(
           "?v",
           0,
-          "Skred 0.79.0 maxed - ALSA 48kHz audio initialized\n",
+          "Skred 0.79.1 maxed - ALSA 48kHz audio initialized\n",
         ),
       ],
       history_commands: [
@@ -806,12 +806,7 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 
     ResetDefaultPads -> {
       #(
-        Model(
-          ..model,
-          pads: default_pads(),
-          held_pads: [],
-          selected_pad_id: 0,
-        ),
+        Model(..model, pads: default_pads(), held_pads: [], selected_pad_id: 0),
         effect.none(),
       )
     }
@@ -1309,28 +1304,29 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
             event.on("mouseup", decode.success(ReleasePad(pad.id))),
             event.on("pad-release", decode.success(ReleasePad(pad.id))),
           ],
-        [
-          html.div([attribute.class("pad-top-row")], [
-            html.span([attribute.class("pad-voice-tag")], [
-              html.text(case pad.custom_cmd != "" {
-                True -> "CMD"
-                False -> "v" <> int.to_string(pad.voice)
-              }),
+          [
+            html.div([attribute.class("pad-top-row")], [
+              html.span([attribute.class("pad-voice-tag")], [
+                html.text(case pad.custom_cmd != "" {
+                  True -> "CMD"
+                  False -> "v" <> int.to_string(pad.voice)
+                }),
+              ]),
+              html.span(
+                [
+                  attribute.class("pad-edit-badge"),
+                  attribute.title("Selected pad"),
+                ],
+                [html.text("⚙")],
+              ),
             ]),
-            html.span(
-              [
-                attribute.class("pad-edit-badge"),
-                attribute.title("Selected pad"),
-              ],
-              [html.text("⚙")],
-            ),
-          ]),
-          html.div([attribute.class("pad-label")], [html.text(pad.label)]),
-          html.div([attribute.class("pad-sub")], [html.text(pad.sub)]),
-        ],
-      )
-    })
-  })
+            html.div([attribute.class("pad-label")], [html.text(pad.label)]),
+            html.div([attribute.class("pad-sub")], [html.text(pad.sub)]),
+          ],
+        )
+      })
+    },
+  )
 }
 
 fn view_pad_configurator(model: Model) -> Element(Msg) {
@@ -1925,7 +1921,7 @@ fn view_status_bar(model: Model) -> Element(Msg) {
     html.div([attribute.class("telemetry-feed")], [
       html.span([attribute.class("status-led-pulse")], []),
       html.span([attribute.class("telemetry-title")], [
-        html.text("SKRED ENGINE 0.79:"),
+        html.text("SKRED ENGINE 0.79.1:"),
       ]),
       html.span([attribute.class("status-text")], [
         html.text(

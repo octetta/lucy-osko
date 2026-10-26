@@ -163,6 +163,55 @@ Executes the Gleeunit test suite verifying:
 
 ---
 
+## 🔄 Updating the Skred Audio Engine Version
+
+The Skred audio engine is vendored into `lucy-osko` from the sibling repository [`pulp`](file:///home/stewartj/book/pulp). Follow this procedure whenever a new Skred release or build is prepared:
+
+### 1. Source of Truth
+The version string is defined centrally in `pulp/VERSION`:
+```bash
+cat ../pulp/VERSION
+# e.g., 0.79.1
+```
+
+### 2. Rebuild the Native Static Library (`libapi.a`)
+Generate `skred-version.h` and compile the native static library with CMake:
+```bash
+cd ../pulp/parts/build_native
+cmake ..
+make -j4
+cd ../../../lucy-osko
+```
+
+### 3. Rebuild the WebAssembly Engine (`skred_api.js` & `skred_api.wasm`)
+Compile the WASM runtime with Emscripten via mise:
+```bash
+cd ../pulp/parts/build_wasm
+mise exec -- ./mkwasm
+cd ../../../lucy-osko
+```
+
+### 4. Sync Vendored Artifacts into Lucy Osko
+Use the built-in Makefile target to copy all native headers, static library, and WASM bundles:
+```bash
+make sync-skred
+```
+This updates:
+* `host/vendor/skred/lib/libapi.a`
+* `host/vendor/skred/include/skred/skred-version.h`
+* `host/vendor/skred/include/skred/api.h`
+* `dist/skred_api.js`
+* `dist/skred_api.wasm`
+
+### 5. Update Version Strings & Rebuild
+If updating default REPL banner or status bar telemetry text, update `src/lucy_osko.gleam` accordingly, then compile and test:
+```bash
+make build
+mise exec -- gleam test
+```
+
+---
+
 ## ⌨️ Command Shortcuts & Navigation
 
 | Context | Key / Action | Description |
