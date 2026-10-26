@@ -1033,9 +1033,16 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
                 case dict.get(voice_states, pad.voice) {
                   Ok(True) -> Pad(..pad, active: True)
                   Ok(False) ->
-                    case list.contains(model.held_pads, pad.id) {
-                      True -> pad
-                      False -> Pad(..pad, active: False)
+                    // For one-shot drum voices 0..7: sample finish ALWAYS unlights the pad!
+                    // This guarantees drum pads never get stuck on any platform or browser.
+                    // For melodic synth voices >= 8: sustain note while physically held.
+                    case pad.voice < 8 {
+                      True -> Pad(..pad, active: False)
+                      False ->
+                        case list.contains(model.held_pads, pad.id) {
+                          True -> pad
+                          False -> Pad(..pad, active: False)
+                        }
                     }
                   Error(_) -> pad
                 }
@@ -1047,6 +1054,20 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
             }
           })
       }
+
+      // If drum voices finished, also clean them up from held_pads
+      let updated_held =
+        model.held_pads
+        |> list.filter(fn(pad_id) {
+          case list.find(model.pads, fn(p) { p.id == pad_id }) {
+            Ok(pad) if pad.voice < 8 ->
+              case dict.get(voice_states, pad.voice) {
+                Ok(False) -> False
+                _ -> True
+              }
+            _ -> True
+          }
+        })
 
       // Append new event details for live table inspection
       let new_info_items = list.map(events, fn(e) { e.info })
@@ -1062,6 +1083,7 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
         Model(
           ..model,
           pads: updated_pads,
+          held_pads: updated_held,
           control_events: current_items,
           total_events: new_total,
         ),
@@ -1258,6 +1280,8 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
       attribute.class("pads-grid"),
       event.on("pointerup", decode.success(ReleaseAllPads)),
       event.on("pointercancel", decode.success(ReleaseAllPads)),
+      event.on("touchend", decode.success(ReleaseAllPads)),
+      event.on("touchcancel", decode.success(ReleaseAllPads)),
     ],
     {
       list.map(model.pads, fn(pad) {
@@ -1277,11 +1301,11 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
             ),
             attribute.attribute("data-pad-id", int.to_string(pad.id)),
             attribute.style("--pad-color", pad.color),
-            event.prevent_default(
-              event.on("pointerdown", decode.success(TriggerPad(pad.id))),
-            ),
+            event.on("pointerdown", decode.success(TriggerPad(pad.id))),
             event.on("pointerup", decode.success(ReleasePad(pad.id))),
             event.on("pointercancel", decode.success(ReleasePad(pad.id))),
+            event.on("touchend", decode.success(ReleasePad(pad.id))),
+            event.on("touchcancel", decode.success(ReleasePad(pad.id))),
           ],
         [
           html.div([attribute.class("pad-top-row")], [

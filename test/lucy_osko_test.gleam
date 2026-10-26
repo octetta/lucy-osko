@@ -233,13 +233,41 @@ pub fn pad_touch_hold_and_release_test() {
 pub fn control_plane_voice_finished_does_not_unlight_held_pad_test() {
   let #(model0, _) = lucy_osko.init(Nil)
 
-  // User presses and holds Pad 0
+  // User presses and holds Pad 8 (Bass C2 synth voice 8)
+  let #(model1, _) = lucy_osko.update(model0, lucy_osko.TriggerPad(8))
+  let assert Ok(pad8_held) = list.find(model1.pads, fn(p) { p.id == 8 })
+  assert pad8_held.active == True
+  assert list.contains(model1.held_pads, 8)
+
+  // Voice 8 emits finished event
+  let finish_json =
+    "[{\"t\":3,\"v\":8,\"p\":-1,\"s\":-1,\"id\":0,\"vals\":[0.0,0.0,0.0]}]"
+  let assert Ok(events) =
+    json.parse(from: finish_json, using: skred.control_plane_decoder())
+
+  let #(model2, _) =
+    lucy_osko.update(model1, lucy_osko.OnControlPlaneEvents(events))
+
+  // Synth Pad 8 MUST remain active/illuminated while the user is physically holding it!
+  let assert Ok(pad8_still_held) = list.find(model2.pads, fn(p) { p.id == 8 })
+  assert pad8_still_held.active == True
+
+  // When user finally lifts finger, ReleasePad unlights it
+  let #(model3, _) = lucy_osko.update(model2, lucy_osko.ReleasePad(8))
+  let assert Ok(pad8_after_lift) = list.find(model3.pads, fn(p) { p.id == 8 })
+  assert pad8_after_lift.active == False
+  assert model3.held_pads == []
+}
+
+pub fn control_plane_voice_finished_unlights_drum_pad_even_if_held_test() {
+  let #(model0, _) = lucy_osko.init(Nil)
+
+  // User triggers Pad 0 (one-shot drum kick voice 0)
   let #(model1, _) = lucy_osko.update(model0, lucy_osko.TriggerPad(0))
   let assert Ok(pad0_held) = list.find(model1.pads, fn(p) { p.id == 0 })
   assert pad0_held.active == True
-  assert list.contains(model1.held_pads, 0)
 
-  // Skred completes sample playback and emits VoiceFinished for voice 0
+  // Drum sample finishes in Skred engine
   let finish_json =
     "[{\"t\":3,\"v\":0,\"p\":-1,\"s\":-1,\"id\":0,\"vals\":[0.0,0.0,0.0]}]"
   let assert Ok(events) =
@@ -248,15 +276,10 @@ pub fn control_plane_voice_finished_does_not_unlight_held_pad_test() {
   let #(model2, _) =
     lucy_osko.update(model1, lucy_osko.OnControlPlaneEvents(events))
 
-  // Pad 0 MUST remain active/illuminated while the user is physically holding it!
-  let assert Ok(pad0_still_held) = list.find(model2.pads, fn(p) { p.id == 0 })
-  assert pad0_still_held.active == True
-
-  // When user finally lifts finger, ReleasePad unlights it
-  let #(model3, _) = lucy_osko.update(model2, lucy_osko.ReleasePad(0))
-  let assert Ok(pad0_after_lift) = list.find(model3.pads, fn(p) { p.id == 0 })
-  assert pad0_after_lift.active == False
-  assert model3.held_pads == []
+  // Drum pad is automatically unlit and cleared from held_pads upon sample completion
+  let assert Ok(pad0_done) = list.find(model2.pads, fn(p) { p.id == 0 })
+  assert pad0_done.active == False
+  assert !list.contains(model2.held_pads, 0)
 }
 
 pub fn control_plane_voice_finished_unlights_non_held_pad_test() {

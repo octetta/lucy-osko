@@ -1028,65 +1028,61 @@
     window.addEventListener("touchstart", unlockAudio, { passive: true });
 
     // Robust Performance Pad Pointer & Touch Tracking
-    // Prevents performance pads from ever getting stuck as pressed on touchscreens
-    const activePadPointers = new Map(); // pointerId -> padBtn
+    // Prevents performance pads from ever getting stuck on touchscreens or WebKitGTK
+    const activeTouches = new Map();
 
-    document.addEventListener("pointerdown", (e) => {
-      const btn = e.target.closest && e.target.closest(".pad-btn");
-      if (btn) {
-        activePadPointers.set(e.pointerId, btn);
-        if (btn.setPointerCapture) {
-          try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+    // 1. First-class touch tracking for WebKitGTK & mobile touchscreens
+    document.addEventListener("touchstart", (e) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        const el = document.elementFromPoint(touch.clientX, touch.clientY);
+        const btn = el && el.closest && el.closest(".pad-btn");
+        if (btn) {
+          activeTouches.set(touch.identifier, btn);
         }
       }
     }, { capture: true, passive: true });
 
-    function releasePointerPad(pointerId) {
-      const btn = activePadPointers.get(pointerId);
-      if (btn) {
-        activePadPointers.delete(pointerId);
-        btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: pointerId }));
+    function handleTouchEnd(e) {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        const btn = activeTouches.get(touch.identifier);
+        if (btn) {
+          activeTouches.delete(touch.identifier);
+          btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+        }
+      }
+      if (!e.touches || e.touches.length === 0) {
+        activeTouches.clear();
+        document.querySelectorAll(".pad-btn.active-pad").forEach((btn) => {
+          btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+        });
       }
     }
 
-    function releaseAllActivePads() {
-      activePadPointers.clear();
+    window.addEventListener("touchend", handleTouchEnd, { passive: true, capture: true });
+    window.addEventListener("touchcancel", handleTouchEnd, { passive: true, capture: true });
+
+    // 2. Pointer event tracking (without capture)
+    window.addEventListener("pointerup", (e) => {
+      if (e.pointerType === "mouse" && e.buttons === 0) {
+        document.querySelectorAll(".pad-btn.active-pad").forEach((btn) => {
+          btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+        });
+      }
+    }, { capture: true, passive: true });
+
+    window.addEventListener("pointercancel", () => {
       document.querySelectorAll(".pad-btn.active-pad").forEach((btn) => {
         btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
       });
-    }
-
-    // Global window listeners for pointer release, cancel, and capture loss
-    window.addEventListener("pointerup", (e) => {
-      releasePointerPad(e.pointerId);
-      if (e.pointerType === "mouse" && e.buttons === 0) {
-        releaseAllActivePads();
-      }
     }, { capture: true, passive: true });
-
-    window.addEventListener("pointercancel", (e) => {
-      releasePointerPad(e.pointerId);
-    }, { capture: true, passive: true });
-
-    window.addEventListener("lostpointercapture", (e) => {
-      releasePointerPad(e.pointerId);
-    }, { capture: true, passive: true });
-
-    // Touch event fallbacks for touchscreens / multi-touch
-    window.addEventListener("touchend", (e) => {
-      if (!e.touches || e.touches.length === 0) {
-        releaseAllActivePads();
-      }
-    }, { passive: true });
-
-    window.addEventListener("touchcancel", (e) => {
-      if (!e.touches || e.touches.length === 0) {
-        releaseAllActivePads();
-      }
-    }, { passive: true });
 
     window.addEventListener("blur", () => {
-      releaseAllActivePads();
+      activeTouches.clear();
+      document.querySelectorAll(".pad-btn.active-pad").forEach((btn) => {
+        btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+      });
     });
   </script>
 </body>
