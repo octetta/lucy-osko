@@ -8,7 +8,9 @@ const win = typeof window !== "undefined" ? window : (typeof globalThis !== "und
 let currentSubscription = null;
 let commandResponseSubscription = null;
 let wasmInitialized = false;
+let eventPumpStarted = false;
 let wasmEventsBuffer = null;
+let mockSeq = 1;
 const EVENT_SIZE = 72; // sizeof(skred_control_event_t)
 const MAX_EVENTS_BATCH = 64;
 
@@ -41,28 +43,43 @@ function getWasmModule() {
   return null;
 }
 
+function resumeAudioContext(M) {
+  if (!M) return;
+  try {
+    if (M.audioContext && M.audioContext.state === "suspended") {
+      M.audioContext.resume();
+    }
+    if (win.AL && win.AL.currentCtx && win.AL.currentCtx.audioCtx && win.AL.currentCtx.audioCtx.state === "suspended") {
+      win.AL.currentCtx.audioCtx.resume();
+    }
+  } catch (e) {}
+}
+
 function ensureWasmEngine() {
-  if (wasmInitialized) return;
   const M = getWasmModule();
   if (!M) return;
+
+  resumeAudioContext(M);
+
+  if (wasmInitialized) {
+    startWasmEventPump(M);
+    return;
+  }
   wasmInitialized = true;
 
   try {
-    // 1. Resume AudioContext if browser suspended it (autoplay policy)
-    if (typeof AudioContext !== "undefined" && M.audioContext && M.audioContext.state === "suspended") {
-      M.audioContext.resume();
-    }
-
-    // 2. Start Skred engine with 256 voices, 16 patterns
+    // 1. Start Skred engine with 256 voices, 16 patterns
     if (typeof M._skred_start === "function") {
-      M._skred_start(512, 256, 0);
-      console.log("[Skred WASM] Audio engine initialized (256 voices, Web Audio)");
+      const res = M._skred_start(512, 256, 0);
+      console.log("[Skred WASM] Audio engine initialized (256 voices):", res);
     }
 
-    // 3. Enable voice & pattern lifecycle events
+    // 2. Enable voice lifecycle events on voices 0..63
     for (let i = 0; i < 64; i++) {
       M.ccall("skred_command", null, ["string"], [`v${i} vc1`]);
     }
+
+    // 3. Enable pattern boundary & step events on patterns 0..15
     for (let i = 0; i < 16; i++) {
       M.ccall("skred_command", null, ["string"], [`y${i} yc1`]);
     }
@@ -89,17 +106,39 @@ function ensureWasmEngine() {
     // 5. Start control plane event pump
     startWasmEventPump(M);
   } catch (err) {
-    console.warn("[Skred WASM] Init failed or deferred:", err);
+    console.warn("[Skred WASM] Init deferred or warning:", err);
   }
 }
+
+// Hook into Module initialization as early as possible
+function hookWasmModule() {
+  if (typeof win === "undefined") return;
+  if (win.Module) {
+    const prev = win.Module.onRuntimeInitialized;
+    win.Module.onRuntimeInitialized = function() {
+      if (typeof prev === "function") prev();
+      ensureWasmEngine();
+    };
+    if (win.Module.calledRun || (win.Module.HEAPU32 && typeof win.Module._skred_command === "function")) {
+      ensureWasmEngine();
+    }
+  } else {
+    win.Module = {
+      onRuntimeInitialized: function() {
+        ensureWasmEngine();
+      }
+    };
+  }
+}
+hookWasmModule();
 
 // User interaction listener to unlock audio on first interaction in browsers
 if (typeof win.addEventListener === "function") {
   const unlockAudio = () => {
     ensureWasmEngine();
   };
-  win.addEventListener("pointerdown", unlockAudio, { once: true, passive: true });
-  win.addEventListener("keydown", unlockAudio, { once: true, passive: true });
+  win.addEventListener("pointerdown", unlockAudio, { passive: true });
+  win.addEventListener("keydown", unlockAudio, { passive: true });
 }
 
 function startWasmEventPump(M) {
@@ -107,9 +146,11 @@ function startWasmEventPump(M) {
   if (!wasmEventsBuffer && typeof M._malloc === "function") {
     wasmEventsBuffer = M._malloc(MAX_EVENTS_BATCH * EVENT_SIZE);
   }
+  if (eventPumpStarted) return;
+  eventPumpStarted = true;
 
   function pump() {
-    if (currentSubscription && M && typeof M._skred_control_event_poll === "function" && wasmEventsBuffer) {
+    if (currentSubscription && M && typeof M._skred_control_event_poll === "function" && wasmEventsBuffer && M.HEAPU32) {
       const count = M._skred_control_event_poll(wasmEventsBuffer, MAX_EVENTS_BATCH);
       if (count > 0) {
         const batch = [];
@@ -160,7 +201,7 @@ export function subscribe_events(on_batch) {
     }
   };
 
-  // If WASM module is already loaded, kick off event pump
+  // If WASM module is ready, start event pump immediately
   const M = getWasmModule();
   if (M) {
     startWasmEventPump(M);
@@ -246,7 +287,7 @@ export function send_command_eval(cmd) {
       else if (cmd.includes("puts")) mockOutput = "# " + cmd.replace(/[\[\]]/g, "").replace("puts", "").trim() + "\n";
       else if (cmd.startsWith("ce")) {
         mockOutput = "# emitted user event: " + cmd + "\n";
-        simulate_mock_event({ t: 4, seq: 100, v: -1, p: -1, s: -1, id: 42, vals: [1.0, 2.0, 3.0] });
+        simulate_mock_event({ t: 4, seq: mockSeq++, v: -1, p: -1, s: -1, id: 42, vals: [1.0, 2.0, 3.0] });
       }
       commandResponseSubscription({ cmd: cmd, ret: 0, response: mockOutput });
     }
@@ -262,13 +303,16 @@ export function send_trigger(voice, velocity) {
   const M = getWasmModule();
   if (M) {
     ensureWasmEngine();
+    if (typeof M._skred_trigger_voice === "function") {
+      M._skred_trigger_voice(voice, velocity);
+    }
     const cmd = `v${voice} l${velocity.toFixed(2)}`;
     M.ccall("skred_command", null, ["string"], [cmd]);
     return;
   }
 
   console.log("[Skred Host Mock] trig:", voice, velocity);
-  simulate_mock_event({ t: 1, seq: 0, v: voice, p: -1, s: -1, id: 0, vals: [velocity, 0, 0] });
+  simulate_mock_event({ t: 1, seq: mockSeq++, v: voice, p: -1, s: -1, id: 0, vals: [velocity, 0, 0] });
 }
 
 export function send_trigger_pitch(voice, pitch, velocity) {
@@ -280,6 +324,9 @@ export function send_trigger_pitch(voice, pitch, velocity) {
   const M = getWasmModule();
   if (M) {
     ensureWasmEngine();
+    if (typeof M._skred_trigger_voice_pitch_velocity === "function") {
+      M._skred_trigger_voice_pitch_velocity(voice, pitch, velocity);
+    }
     const cmd = pitch <= 127.0
       ? `v${voice} n${pitch.toFixed(1)} l${velocity.toFixed(2)}`
       : `v${voice} f${pitch.toFixed(1)} l${velocity.toFixed(2)}`;
@@ -288,7 +335,7 @@ export function send_trigger_pitch(voice, pitch, velocity) {
   }
 
   console.log("[Skred Host Mock] trig_pitch:", voice, pitch, velocity);
-  simulate_mock_event({ t: 1, seq: 0, v: voice, p: -1, s: -1, id: 0, vals: [velocity, pitch, 0] });
+  simulate_mock_event({ t: 1, seq: mockSeq++, v: voice, p: -1, s: -1, id: 0, vals: [velocity, pitch, 0] });
 }
 
 export function send_release(voice) {
@@ -300,13 +347,16 @@ export function send_release(voice) {
   const M = getWasmModule();
   if (M) {
     ensureWasmEngine();
+    if (typeof M._skred_release_voice === "function") {
+      M._skred_release_voice(voice);
+    }
     const cmd = `v${voice} l0`;
     M.ccall("skred_command", null, ["string"], [cmd]);
     return;
   }
 
   console.log("[Skred Host Mock] release:", voice);
-  simulate_mock_event({ t: 2, seq: 0, v: voice, p: -1, s: -1, id: 0, vals: [0, 0, 0] });
+  simulate_mock_event({ t: 2, seq: mockSeq++, v: voice, p: -1, s: -1, id: 0, vals: [0, 0, 0] });
 }
 
 function simulate_mock_event(evt) {
