@@ -1,6 +1,7 @@
 //// Lucy Osko: Community showcase for Gleam + Lustre running on a native C / webview.h host
 //// with hard real-time bidirectional FFI communication to the Skred audio synthesizer engine,
-//// featuring interactive Skode REPL console and live Control Plane event inspector.
+//// featuring configurable 4x4 velocity performance pads, interactive Skode REPL console,
+//// and live Control Plane event inspector.
 
 import gleam/float
 import gleam/int
@@ -38,17 +39,6 @@ pub type ViewTab {
   SplitTab
 }
 
-pub type Track {
-  Track(
-    name: String,
-    icon: String,
-    voice: Int,
-    color: String,
-    steps: List(Bool),
-    muted: Bool,
-  )
-}
-
 pub type Pad {
   Pad(
     id: Int,
@@ -58,6 +48,21 @@ pub type Pad {
     pitch: Float,
     color: String,
     active: Bool,
+    custom_cmd: String,
+  )
+}
+
+pub type PadPreset {
+  PadPreset(
+    id: String,
+    name: String,
+    icon: String,
+    voice: Int,
+    label: String,
+    sub: String,
+    pitch: Float,
+    color: String,
+    custom_cmd: String,
   )
 }
 
@@ -72,10 +77,7 @@ pub type CommandHistoryEntry {
 pub type Model {
   Model(
     active_tab: ViewTab,
-    playing: Bool,
-    current_step: Int,
-    bpm: Float,
-    tracks: List(Track),
+    selected_pad_id: Int,
     pads: List(Pad),
     cutoff: Float,
     resonance: Float,
@@ -96,17 +98,23 @@ pub type Model {
 
 pub type Msg {
   SetTab(ViewTab)
-  TogglePlay
-  SetBpm(String)
-  ToggleStep(track_idx: Int, step_idx: Int)
-  ToggleMute(track_idx: Int)
-  TriggerPad(pad_id: Int, voice: Int, pitch: Float)
-  ReleasePad(pad_id: Int, voice: Int)
+  SelectPad(pad_id: Int)
+  TriggerPad(pad_id: Int)
+  ReleasePad(pad_id: Int)
+  UpdatePadLabel(pad_id: Int, label: String)
+  UpdatePadSub(pad_id: Int, sub: String)
+  UpdatePadVoice(pad_id: Int, voice_str: String)
+  UpdatePadPitch(pad_id: Int, pitch_str: String)
+  UpdatePadColor(pad_id: Int, color: String)
+  UpdatePadCustomCmd(pad_id: Int, cmd: String)
+  ApplyPadPreset(pad_id: Int, preset_id: String)
+  ResetDefaultPads
+  PanicAllNotesOff
+  TestPad(pad_id: Int)
+  // Synth parameters
   SetCutoff(String)
   SetResonance(String)
   SetVolume(String)
-  LoadPreset(String)
-  ClearAll
   // REPL Console messages
   SetCommandInput(String)
   SubmitCommand
@@ -126,56 +134,66 @@ pub type Msg {
 // INITIAL STATE & PRESETS
 // =============================================================================
 
+pub fn default_pads() -> List(Pad) {
+  [
+    // Row 1: Drums (Voices 0..3)
+    Pad(0, 0, "KICK", "909 Punch", 440.0, "#ff3366", False, ""),
+    Pad(1, 1, "KICK TIGHT", "High Punch", 490.0, "#ff5577", False, ""),
+    Pad(2, 2, "SNARE", "Crisp 909", 440.0, "#ff9900", False, ""),
+    Pad(3, 3, "CLAP", "909 Clap", 440.0, "#ffaa22", False, ""),
+    // Row 2: Hats & Percussion (Voices 4..7)
+    Pad(4, 4, "CH HAT", "Closed Hat", 440.0, "#ffea00", False, ""),
+    Pad(5, 5, "OP HAT", "Open Hat", 440.0, "#00e5ff", False, ""),
+    Pad(6, 6, "HAT ROLL", "Fast Hat", 470.0, "#ffee55", False, ""),
+    Pad(7, 7, "RIM", "808 Rimshot", 440.0, "#ff8844", False, ""),
+    // Row 3: Bass 303 (Voices 8..11, MIDI notes 36..45)
+    Pad(8, 8, "BASS C2", "MIDI 36", 36.0, "#00ff88", False, ""),
+    Pad(9, 9, "BASS E2", "MIDI 40", 40.0, "#00dd77", False, ""),
+    Pad(10, 10, "BASS G2", "MIDI 43", 43.0, "#00bb66", False, ""),
+    Pad(11, 11, "BASS A2", "MIDI 45", 45.0, "#009955", False, ""),
+    // Row 4: Lead Synths (Voices 12..15, MIDI notes 60..71)
+    Pad(12, 12, "LEAD C4", "MIDI 60", 60.0, "#cc00ff", False, ""),
+    Pad(13, 13, "LEAD E4", "MIDI 64", 64.0, "#aa00dd", False, ""),
+    Pad(14, 14, "LEAD G4", "MIDI 67", 67.0, "#8800bb", False, ""),
+    Pad(15, 15, "LEAD B4", "MIDI 71", 71.0, "#660099", False, ""),
+  ]
+}
+
+pub fn pad_presets() -> List(PadPreset) {
+  [
+    PadPreset("kick", "909 Kick", "🥁", 0, "KICK", "909 Punch", 440.0, "#ff3366", ""),
+    PadPreset("tight", "Tight Kick", "🥊", 1, "KICK TIGHT", "High Punch", 490.0, "#ff5577", ""),
+    PadPreset("snare", "909 Snare", "💥", 2, "SNARE", "Crisp 909", 440.0, "#ff9900", ""),
+    PadPreset("clap", "909 Clap", "👏", 3, "CLAP", "909 Clap", 440.0, "#ffaa22", ""),
+    PadPreset("ch_hat", "Closed Hat", "⚡", 4, "CH HAT", "Closed Hat", 440.0, "#ffea00", ""),
+    PadPreset("op_hat", "Open Hat", "✨", 5, "OP HAT", "Open Hat", 440.0, "#00e5ff", ""),
+    PadPreset("hat_roll", "Hat Roll", "💫", 6, "HAT ROLL", "Fast Hat", 470.0, "#ffee55", ""),
+    PadPreset("rim", "Rimshot", "🥢", 7, "RIM", "808 Rim", 440.0, "#ff8844", ""),
+    PadPreset("bass_c", "Bass C2", "🎸", 8, "BASS C2", "MIDI 36", 36.0, "#00ff88", ""),
+    PadPreset("bass_e", "Bass E2", "🎸", 9, "BASS E2", "MIDI 40", 40.0, "#00dd77", ""),
+    PadPreset("bass_g", "Bass G2", "🎸", 10, "BASS G2", "MIDI 43", 43.0, "#00bb66", ""),
+    PadPreset("bass_a", "Bass A2", "🎸", 11, "BASS A2", "MIDI 45", 45.0, "#009955", ""),
+    PadPreset("lead_c", "Lead C4", "🎹", 12, "LEAD C4", "MIDI 60", 60.0, "#cc00ff", ""),
+    PadPreset("lead_e", "Lead E4", "🎹", 13, "LEAD E4", "MIDI 64", 64.0, "#aa00dd", ""),
+    PadPreset("lead_g", "Lead G4", "🎹", 14, "LEAD G4", "MIDI 67", 67.0, "#8800bb", ""),
+    PadPreset("lead_b", "Lead B4", "🎹", 15, "LEAD B4", "MIDI 71", 71.0, "#660099", ""),
+    PadPreset("marker_42", "Marker 42", "🏷️", 0, "CE 42", "User Marker", 440.0, "#ff00aa", "ce 42, 100, 200, 300"),
+    PadPreset("marker_99", "Marker 99", "🏷️", 0, "CE 99", "User Marker", 440.0, "#ffaa00", "ce 99, 1, 2, 3"),
+  ]
+}
+
+pub fn color_palette() -> List(String) {
+  [
+    "#ff3366", "#ff9900", "#ffea00", "#00ff88",
+    "#00e5ff", "#cc00ff", "#ff00aa", "#ffffff",
+  ]
+}
+
 fn init(_) -> #(Model, Effect(Msg)) {
-  let default_tracks = [
-    Track(name: "Kick 909", icon: "🥁", voice: 0, color: "#ff3366", steps: preset_four_on_floor(), muted: False),
-    Track(name: "Kick Tight", icon: "🥊", voice: 1, color: "#ff5577", steps: empty_16_steps(), muted: False),
-    Track(name: "Snare 909", icon: "💥", voice: 2, color: "#ff9900", steps: preset_backbeat(), muted: False),
-    Track(name: "Clap 909", icon: "👏", voice: 3, color: "#ffaa22", steps: empty_16_steps(), muted: False),
-    Track(name: "Closed Hat", icon: "⚡", voice: 4, color: "#ffea00", steps: preset_eighths(), muted: False),
-    Track(name: "Open Hat", icon: "✨", voice: 5, color: "#00e5ff", steps: preset_offbeats(), muted: False),
-    Track(name: "Hat Roll", icon: "💫", voice: 6, color: "#ffee55", steps: empty_16_steps(), muted: False),
-    Track(name: "Rimshot", icon: "🥢", voice: 7, color: "#ff8844", steps: empty_16_steps(), muted: False),
-    Track(name: "Bass C2", icon: "🎸", voice: 8, color: "#00ff88", steps: preset_bassline(), muted: False),
-    Track(name: "Bass E2", icon: "🎸", voice: 9, color: "#00dd77", steps: empty_16_steps(), muted: False),
-    Track(name: "Bass G2", icon: "🎸", voice: 10, color: "#00bb66", steps: empty_16_steps(), muted: False),
-    Track(name: "Bass A2", icon: "🎸", voice: 11, color: "#009955", steps: empty_16_steps(), muted: False),
-    Track(name: "Lead C4", icon: "🎹", voice: 12, color: "#cc00ff", steps: preset_leadline(), muted: False),
-    Track(name: "Lead E4", icon: "🎹", voice: 13, color: "#aa00dd", steps: empty_16_steps(), muted: False),
-    Track(name: "Lead G4", icon: "🎹", voice: 14, color: "#8800bb", steps: empty_16_steps(), muted: False),
-    Track(name: "Lead B4", icon: "🎹", voice: 15, color: "#660099", steps: empty_16_steps(), muted: False),
-  ]
-
-  let default_pads = [
-    // Row 1: Drums (Dedicated voices 0..3)
-    Pad(0, 0, "KICK", "909 Punch", 440.0, "#ff3366", False),
-    Pad(1, 1, "KICK TIGHT", "High Punch", 490.0, "#ff3366", False),
-    Pad(2, 2, "SNARE", "Crisp 909", 440.0, "#ff9900", False),
-    Pad(3, 3, "CLAP", "909 Clap", 440.0, "#ff9900", False),
-    // Row 2: Hats & Percussion (Dedicated voices 4..7)
-    Pad(4, 4, "CH HAT", "Closed Hat", 440.0, "#ffea00", False),
-    Pad(5, 5, "OP HAT", "Open Hat", 440.0, "#00e5ff", False),
-    Pad(6, 6, "HAT ROLL", "Fast Hat", 470.0, "#ffea00", False),
-    Pad(7, 7, "RIM", "808 Rimshot", 440.0, "#ff9900", False),
-    // Row 3: Bass 303 (Dedicated voices 8..11, MIDI notes 36..45)
-    Pad(8, 8, "BASS C2", "MIDI 36", 36.0, "#00ff88", False),
-    Pad(9, 9, "BASS E2", "MIDI 40", 40.0, "#00ff88", False),
-    Pad(10, 10, "BASS G2", "MIDI 43", 43.0, "#00ff88", False),
-    Pad(11, 11, "BASS A2", "MIDI 45", 45.0, "#00ff88", False),
-    // Row 4: Lead Synths (Dedicated voices 12..15, MIDI notes 60..71)
-    Pad(12, 12, "LEAD C4", "MIDI 60", 60.0, "#cc00ff", False),
-    Pad(13, 13, "LEAD E4", "MIDI 64", 64.0, "#cc00ff", False),
-    Pad(14, 14, "LEAD G4", "MIDI 67", 67.0, "#cc00ff", False),
-    Pad(15, 15, "LEAD B4", "MIDI 71", 71.0, "#cc00ff", False),
-  ]
-
   let initial_model = Model(
     active_tab: SplitTab,
-    playing: False,
-    current_step: 0,
-    bpm: 124.0,
-    tracks: default_tracks,
-    pads: default_pads,
+    selected_pad_id: 0,
+    pads: default_pads(),
     cutoff: 750.0,
     resonance: 0.65,
     volume: 0.85,
@@ -201,111 +219,14 @@ fn init(_) -> #(Model, Effect(Msg)) {
     total_events: 0,
   )
 
-  // Start subscriptions to Skred C host events and command responses,
-  // and compile all 16 sound patterns (y0-y15) in Skred!
-  let initial_patterns = compile_all_patterns(default_tracks, 124.0)
   #(
     initial_model,
     effect.batch([
       skred.subscribe_control_plane(OnControlPlaneEvents),
       skred.subscribe_command_responses(OnCommandResult),
-      skred.command(initial_patterns),
-      skred.execute_command("Z?"),
+      skred.execute_command("?v"),
     ]),
   )
-}
-
-fn get_at(items: List(a), index: Int) -> Result(a, Nil) {
-  case index < 0 {
-    True -> Error(Nil)
-    False -> items |> list.drop(index) |> list.first
-  }
-}
-
-fn range(start: Int, end: Int) -> List(Int) {
-  case start > end {
-    True -> []
-    False -> [start, ..range(start + 1, end)]
-  }
-}
-
-// Preset step helpers
-fn preset_four_on_floor() -> List(Bool) {
-  [True, False, False, False, True, False, False, False, True, False, False, False, True, False, False, False]
-}
-
-fn preset_backbeat() -> List(Bool) {
-  [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False]
-}
-
-fn preset_eighths() -> List(Bool) {
-  [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]
-}
-
-fn preset_offbeats() -> List(Bool) {
-  [False, False, True, False, False, False, True, False, False, False, True, False, False, False, True, False]
-}
-
-fn preset_bassline() -> List(Bool) {
-  [False, False, True, False, False, True, False, False, True, False, False, True, False, True, False, False]
-}
-
-fn preset_leadline() -> List(Bool) {
-  [True, False, False, True, False, False, True, False, False, True, False, False, True, False, False, False]
-}
-
-fn empty_16_steps() -> List(Bool) {
-  list.repeat(False, times: 16)
-}
-
-// =============================================================================
-// PATTERN COMPILER
-// =============================================================================
-
-// Compiles a sound's track into its own dedicated pattern (y0-y15).
-// In Skode, a pattern's length is determined by its last non-empty step.
-// If step 15 does not contain a note trigger, a harmless register write [=127,0] x15
-// is emitted to pin the pattern length to exactly 16 steps without audio side-effects.
-pub fn compile_track_pattern(track: Track) -> String {
-  let pat_idx = track.voice
-  let header = "y" <> int.to_string(pat_idx) <> "\n"
-  let ctrl = case pat_idx == 0 {
-    True -> "yc1\n"
-    False -> ""
-  }
-  let mute = case track.muted {
-    True -> "ym1\n"
-    False -> "ym0\n"
-  }
-
-  let step_commands = range(0, 14)
-    |> list.map(fn(step_idx) {
-      let is_step_on = get_at(track.steps, step_idx) |> result.unwrap(False)
-      case !track.muted && is_step_on {
-        True -> "[v" <> int.to_string(track.voice) <> " l1] x" <> int.to_string(step_idx) <> "\n"
-        False -> "[] x" <> int.to_string(step_idx) <> "\n"
-      }
-    })
-    |> string.concat
-
-  let step_15 = {
-    let is_step_15_on = get_at(track.steps, 15) |> result.unwrap(False)
-    case !track.muted && is_step_15_on {
-      True -> "[v" <> int.to_string(track.voice) <> " l1] x15\n"
-      False -> "[=127,0] x15\n"
-    }
-  }
-
-  header <> ctrl <> mute <> step_commands <> step_15
-}
-
-pub fn compile_all_patterns(tracks: List(Track), bpm: Float) -> String {
-  let header = "M " <> int.to_string(float.round(bpm)) <> " 16\n"
-  let pattern_commands = tracks
-    |> list.map(compile_track_pattern)
-    |> string.concat
-
-  header <> pattern_commands
 }
 
 // =============================================================================
@@ -318,85 +239,18 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       #(Model(..model, active_tab: tab), effect.none())
     }
 
-    TogglePlay -> {
-      case model.playing {
-        True -> {
-          #(Model(..model, playing: False), skred.command("Z0"))
-        }
-        False -> {
-          let pattern_cmd = compile_all_patterns(model.tracks, model.bpm)
-          #(
-            Model(..model, playing: True),
-            effect.batch([
-              skred.command(pattern_cmd),
-              skred.command("Z1"),
-            ]),
-          )
-        }
-      }
+    SelectPad(pad_id) -> {
+      #(Model(..model, selected_pad_id: pad_id), effect.none())
     }
 
-    SetBpm(str_val) -> {
-      let bpm = case float.parse(str_val) {
-        Ok(v) if v >=. 50.0 && v <=. 220.0 -> v
-        _ -> model.bpm
-      }
-      let cmd = skred.command("M " <> int.to_string(float.round(bpm)) <> " 16")
-      #(Model(..model, bpm: bpm), cmd)
-    }
-
-    ToggleStep(track_idx, step_idx) -> {
-      let updated_tracks = model.tracks
-        |> list.index_map(fn(track, i) {
-          case i == track_idx {
-            True -> {
-              let updated_steps = track.steps
-                |> list.index_map(fn(val, s_i) {
-                  case s_i == step_idx {
-                    True -> !val
-                    False -> val
-                  }
-                })
-              Track(..track, steps: updated_steps)
-            }
-            False -> track
-          }
-        })
-
-      let track = get_at(updated_tracks, track_idx) |> result.unwrap(Track("", "", 0, "", [], False))
-      let track_cmd = compile_track_pattern(track)
-      let side_effect = case model.playing {
-        True -> skred.command(track_cmd)
-        False -> {
-          let step_on = get_at(track.steps, step_idx) |> result.unwrap(False)
-          case step_on {
-            True -> effect.batch([
-              skred.command(track_cmd),
-              skred.trigger(track.voice, 0.95),
-            ])
-            False -> skred.command(track_cmd)
-          }
-        }
+    TriggerPad(pad_id) -> {
+      let target_pad = list.find(model.pads, fn(p) { p.id == pad_id })
+      let trigger_effect = case target_pad {
+        Ok(pad) if pad.custom_cmd != "" -> skred.command(pad.custom_cmd)
+        Ok(pad) -> skred.trigger_pitch(pad.voice, pad.pitch, 0.95)
+        Error(_) -> effect.none()
       }
 
-      #(Model(..model, tracks: updated_tracks), side_effect)
-    }
-
-    ToggleMute(track_idx) -> {
-      let updated_tracks = model.tracks
-        |> list.index_map(fn(track, i) {
-          case i == track_idx {
-            True -> Track(..track, muted: !track.muted)
-            False -> track
-          }
-        })
-
-      let track = get_at(updated_tracks, track_idx) |> result.unwrap(Track("", "", 0, "", [], False))
-      let track_cmd = compile_track_pattern(track)
-      #(Model(..model, tracks: updated_tracks), skred.command(track_cmd))
-    }
-
-    TriggerPad(pad_id, voice, pitch) -> {
       let updated_pads = model.pads
         |> list.map(fn(pad) {
           case pad.id == pad_id {
@@ -405,10 +259,16 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           }
         })
 
-      #(Model(..model, pads: updated_pads), skred.trigger_pitch(voice, pitch, 0.95))
+      #(Model(..model, pads: updated_pads, selected_pad_id: pad_id), trigger_effect)
     }
 
-    ReleasePad(pad_id, voice) -> {
+    ReleasePad(pad_id) -> {
+      let target_pad = list.find(model.pads, fn(p) { p.id == pad_id })
+      let release_effect = case target_pad {
+        Ok(pad) if pad.custom_cmd == "" -> skred.release(pad.voice)
+        _ -> effect.none()
+      }
+
       let updated_pads = model.pads
         |> list.map(fn(pad) {
           case pad.id == pad_id {
@@ -417,7 +277,142 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           }
         })
 
-      #(Model(..model, pads: updated_pads), skred.release(voice))
+      #(Model(..model, pads: updated_pads), release_effect)
+    }
+
+    TestPad(pad_id) -> {
+      let target_pad = list.find(model.pads, fn(p) { p.id == pad_id })
+      let test_effect = case target_pad {
+        Ok(pad) if pad.custom_cmd != "" -> skred.command(pad.custom_cmd)
+        Ok(pad) -> skred.trigger_pitch(pad.voice, pad.pitch, 0.95)
+        Error(_) -> effect.none()
+      }
+
+      let updated_pads = model.pads
+        |> list.map(fn(pad) {
+          case pad.id == pad_id {
+            True -> Pad(..pad, active: True)
+            False -> pad
+          }
+        })
+
+      #(Model(..model, pads: updated_pads), test_effect)
+    }
+
+    UpdatePadLabel(pad_id, new_label) -> {
+      let updated_pads = model.pads
+        |> list.map(fn(pad) {
+          case pad.id == pad_id {
+            True -> Pad(..pad, label: new_label)
+            False -> pad
+          }
+        })
+      #(Model(..model, pads: updated_pads), effect.none())
+    }
+
+    UpdatePadSub(pad_id, new_sub) -> {
+      let updated_pads = model.pads
+        |> list.map(fn(pad) {
+          case pad.id == pad_id {
+            True -> Pad(..pad, sub: new_sub)
+            False -> pad
+          }
+        })
+      #(Model(..model, pads: updated_pads), effect.none())
+    }
+
+    UpdatePadVoice(pad_id, voice_str) -> {
+      case int.parse(voice_str) {
+        Ok(v) if v >= 0 && v <= 255 -> {
+          let updated_pads = model.pads
+            |> list.map(fn(pad) {
+              case pad.id == pad_id {
+                True -> Pad(..pad, voice: v)
+                False -> pad
+              }
+            })
+          #(Model(..model, pads: updated_pads), effect.none())
+        }
+        _ -> #(model, effect.none())
+      }
+    }
+
+    UpdatePadPitch(pad_id, pitch_str) -> {
+      case float.parse(pitch_str) {
+        Ok(p) if p >. 0.0 -> {
+          let updated_pads = model.pads
+            |> list.map(fn(pad) {
+              case pad.id == pad_id {
+                True -> Pad(..pad, pitch: p)
+                False -> pad
+              }
+            })
+          #(Model(..model, pads: updated_pads), effect.none())
+        }
+        _ -> #(model, effect.none())
+      }
+    }
+
+    UpdatePadColor(pad_id, new_color) -> {
+      let updated_pads = model.pads
+        |> list.map(fn(pad) {
+          case pad.id == pad_id {
+            True -> Pad(..pad, color: new_color)
+            False -> pad
+          }
+        })
+      #(Model(..model, pads: updated_pads), effect.none())
+    }
+
+    UpdatePadCustomCmd(pad_id, new_cmd) -> {
+      let updated_pads = model.pads
+        |> list.map(fn(pad) {
+          case pad.id == pad_id {
+            True -> Pad(..pad, custom_cmd: new_cmd)
+            False -> pad
+          }
+        })
+      #(Model(..model, pads: updated_pads), effect.none())
+    }
+
+    ApplyPadPreset(pad_id, preset_id) -> {
+      let found_preset = list.find(pad_presets(), fn(p) { p.id == preset_id })
+      case found_preset {
+        Ok(p) -> {
+          let updated_pads = model.pads
+            |> list.map(fn(pad) {
+              case pad.id == pad_id {
+                True ->
+                  Pad(
+                    ..pad,
+                    voice: p.voice,
+                    label: p.label,
+                    sub: p.sub,
+                    pitch: p.pitch,
+                    color: p.color,
+                    custom_cmd: p.custom_cmd,
+                  )
+                False -> pad
+              }
+            })
+          let audition_effect = case p.custom_cmd != "" {
+            True -> skred.command(p.custom_cmd)
+            False -> skred.trigger_pitch(p.voice, p.pitch, 0.95)
+          }
+          #(Model(..model, pads: updated_pads), audition_effect)
+        }
+        Error(_) -> #(model, effect.none())
+      }
+    }
+
+    ResetDefaultPads -> {
+      #(Model(..model, pads: default_pads(), selected_pad_id: 0), effect.none())
+    }
+
+    PanicAllNotesOff -> {
+      let updated_pads = model.pads
+        |> list.map(fn(pad) { Pad(..pad, active: False) })
+      #(Model(..model, pads: updated_pads), skred.command("O Z0"))
     }
 
     SetCutoff(str_val) -> {
@@ -439,77 +434,6 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       #(Model(..model, volume: vol), skred.command(cmd))
     }
 
-    LoadPreset(preset_name) -> {
-      let new_tracks = case preset_name {
-        "techno" -> [
-          Track("Kick 909", "🥁", 0, "#ff3366", preset_four_on_floor(), False),
-          Track("Kick Tight", "🥊", 1, "#ff5577", empty_16_steps(), False),
-          Track("Snare 909", "💥", 2, "#ff9900", preset_backbeat(), False),
-          Track("Clap 909", "👏", 3, "#ffaa22", [False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, False], False),
-          Track("Closed Hat", "⚡", 4, "#ffea00", preset_eighths(), False),
-          Track("Open Hat", "✨", 5, "#00e5ff", preset_offbeats(), False),
-          Track("Hat Roll", "💫", 6, "#ffee55", [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True], False),
-          Track("Rimshot", "🥢", 7, "#ff8844", empty_16_steps(), False),
-          Track("Bass C2", "🎸", 8, "#00ff88", preset_bassline(), False),
-          Track("Bass E2", "🎸", 9, "#00dd77", empty_16_steps(), False),
-          Track("Bass G2", "🎸", 10, "#00bb66", empty_16_steps(), False),
-          Track("Bass A2", "🎸", 11, "#009955", empty_16_steps(), False),
-          Track("Lead C4", "🎹", 12, "#cc00ff", preset_leadline(), False),
-          Track("Lead E4", "🎹", 13, "#aa00dd", empty_16_steps(), False),
-          Track("Lead G4", "🎹", 14, "#8800bb", empty_16_steps(), False),
-          Track("Lead B4", "🎹", 15, "#660099", empty_16_steps(), False),
-        ]
-        "industrial" -> [
-          Track("Kick 909", "🥁", 0, "#ff3366", [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False], False),
-          Track("Kick Tight", "🥊", 1, "#ff5577", [False, True, False, True, False, False, False, True, False, True, False, False, False, True, False, False], False),
-          Track("Snare 909", "💥", 2, "#ff9900", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, True, True], False),
-          Track("Clap 909", "👏", 3, "#ffaa22", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False], False),
-          Track("Closed Hat", "⚡", 4, "#ffea00", list.repeat(True, times: 16), False),
-          Track("Open Hat", "✨", 5, "#00e5ff", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False], False),
-          Track("Hat Roll", "💫", 6, "#ffee55", [False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True], False),
-          Track("Rimshot", "🥢", 7, "#ff8844", [False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False], False),
-          Track("Bass C2", "🎸", 8, "#00ff88", [True, False, False, True, False, False, True, False, False, True, False, False, True, False, True, False], False),
-          Track("Bass E2", "🎸", 9, "#00dd77", [False, False, True, False, False, True, False, False, True, False, False, True, False, False, False, False], False),
-          Track("Bass G2", "🎸", 10, "#00bb66", empty_16_steps(), False),
-          Track("Bass A2", "🎸", 11, "#009955", empty_16_steps(), False),
-          Track("Lead C4", "🎹", 12, "#cc00ff", [False, False, True, False, True, False, False, False, False, False, True, False, True, False, False, False], False),
-          Track("Lead E4", "🎹", 13, "#aa00dd", empty_16_steps(), False),
-          Track("Lead G4", "🎹", 14, "#8800bb", [False, False, False, False, False, False, False, True, False, False, False, False, False, False, True, False], False),
-          Track("Lead B4", "🎹", 15, "#660099", empty_16_steps(), False),
-        ]
-        "synthwave" -> [
-          Track("Kick 909", "🥁", 0, "#ff3366", preset_four_on_floor(), False),
-          Track("Kick Tight", "🥊", 1, "#ff5577", empty_16_steps(), False),
-          Track("Snare 909", "💥", 2, "#ff9900", preset_backbeat(), False),
-          Track("Clap 909", "👏", 3, "#ffaa22", [False, False, False, False, True, False, False, False, False, False, False, False, True, False, False, False], False),
-          Track("Closed Hat", "⚡", 4, "#ffea00", preset_eighths(), False),
-          Track("Open Hat", "✨", 5, "#00e5ff", [False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False], False),
-          Track("Hat Roll", "💫", 6, "#ffee55", empty_16_steps(), False),
-          Track("Rimshot", "🥢", 7, "#ff8844", empty_16_steps(), False),
-          Track("Bass C2", "🎸", 8, "#00ff88", list.repeat(True, times: 16), False),
-          Track("Bass E2", "🎸", 9, "#00dd77", empty_16_steps(), False),
-          Track("Bass G2", "🎸", 10, "#00bb66", empty_16_steps(), False),
-          Track("Bass A2", "🎸", 11, "#009955", empty_16_steps(), False),
-          Track("Lead C4", "🎹", 12, "#cc00ff", [True, False, False, False, False, False, True, False, True, False, False, False, True, False, False, False], False),
-          Track("Lead E4", "🎹", 13, "#aa00dd", [False, False, False, True, False, False, False, False, False, False, False, True, False, False, False, False], False),
-          Track("Lead G4", "🎹", 14, "#8800bb", empty_16_steps(), False),
-          Track("Lead B4", "🎹", 15, "#660099", empty_16_steps(), False),
-        ]
-        _ -> model.tracks
-      }
-
-      let pattern_cmd = compile_all_patterns(new_tracks, model.bpm)
-      #(Model(..model, tracks: new_tracks), skred.command(pattern_cmd))
-    }
-
-    ClearAll -> {
-      let cleared_tracks = model.tracks
-        |> list.map(fn(t) { Track(..t, steps: empty_16_steps()) })
-      
-      let pattern_cmd = compile_all_patterns(cleared_tracks, model.bpm)
-      #(Model(..model, tracks: cleared_tracks), skred.command(pattern_cmd))
-    }
-
     // --- REPL Console ---
     SetCommandInput(text) -> {
       #(
@@ -519,20 +443,20 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     }
 
     SubmitCommand -> {
-      let trimmed = string.trim(model.command_input)
-      case trimmed {
+      let cmd = string.trim(model.command_input)
+      case cmd {
         "" -> #(model, effect.none())
-        cmd -> {
-          let updated_history = case model.history_commands {
-            [first, ..rest] if first == cmd -> [cmd, ..rest]
-            others -> [cmd, ..others]
-          } |> list.take(50)
+        _ -> {
+          let new_history_cmds = [
+            cmd,
+            ..list.filter(model.history_commands, fn(c) { c != cmd })
+          ] |> list.take(50)
 
           #(
             Model(
               ..model,
               command_input: "",
-              history_commands: updated_history,
+              history_commands: new_history_cmds,
               history_index: -1,
               saved_draft: "",
             ),
@@ -543,84 +467,86 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     }
 
     RunQuickCommand(cmd) -> {
-      let updated_history = case model.history_commands {
-        [first, ..rest] if first == cmd -> [cmd, ..rest]
-        others -> [cmd, ..others]
-      } |> list.take(50)
-
       #(
-        Model(
-          ..model,
-          history_commands: updated_history,
-          history_index: -1,
-          saved_draft: "",
-        ),
+        Model(..model, command_input: cmd),
         skred.execute_command(cmd),
       )
     }
 
     OnCommandKeyDown(key) -> {
       case key {
-        "Enter" -> update(model, SubmitCommand)
         "ArrowUp" -> {
-          case model.history_commands {
-            [] -> #(model, effect.none())
-            _ -> {
-              let next_index = model.history_index + 1
-              case get_at(model.history_commands, next_index) {
-                Ok(recalled_cmd) -> {
-                  let draft = case model.history_index < 0 {
-                    True -> model.command_input
-                    False -> model.saved_draft
-                  }
-                  #(
-                    Model(
-                      ..model,
-                      command_input: recalled_cmd,
-                      history_index: next_index,
-                      saved_draft: draft,
-                    ),
-                    effect.none(),
-                  )
-                }
-                Error(_) -> #(model, effect.none())
+          let total = list.length(model.history_commands)
+          case total > 0 {
+            False -> #(model, effect.none())
+            True -> {
+              let saved_draft = case model.history_index {
+                -1 -> model.command_input
+                _ -> model.saved_draft
               }
+              let next_idx = case model.history_index + 1 < total {
+                True -> model.history_index + 1
+                False -> model.history_index
+              }
+              let picked_cmd = model.history_commands
+                |> list.drop(next_idx)
+                |> list.first
+                |> result.unwrap(model.command_input)
+
+              #(
+                Model(
+                  ..model,
+                  command_input: picked_cmd,
+                  history_index: next_idx,
+                  saved_draft: saved_draft,
+                ),
+                effect.none(),
+              )
             }
           }
         }
+
         "ArrowDown" -> {
           case model.history_index {
-            idx if idx > 0 -> {
-              let next_index = idx - 1
-              case get_at(model.history_commands, next_index) {
-                Ok(recalled_cmd) -> #(
-                  Model(..model, command_input: recalled_cmd, history_index: next_index),
-                  effect.none(),
-                )
-                Error(_) -> #(model, effect.none())
-              }
-            }
+            -1 -> #(model, effect.none())
             0 -> {
               #(
                 Model(
                   ..model,
                   command_input: model.saved_draft,
                   history_index: -1,
+                  saved_draft: "",
                 ),
                 effect.none(),
               )
             }
-            _ -> #(model, effect.none())
+            curr_idx -> {
+              let next_idx = curr_idx - 1
+              let picked_cmd = model.history_commands
+                |> list.drop(next_idx)
+                |> list.first
+                |> result.unwrap("")
+
+              #(
+                Model(
+                  ..model,
+                  command_input: picked_cmd,
+                  history_index: next_idx,
+                ),
+                effect.none(),
+              )
+            }
           }
         }
+
         _ -> #(model, effect.none())
       }
     }
 
     OnCommandResult(res) -> {
-      let new_entry = CommandHistoryEntry(cmd: res.cmd, ret: res.ret, response: res.response)
-      let updated_history = [new_entry, ..model.command_history] |> list.take(50)
-      #(Model(..model, command_history: updated_history), effect.none())
+      let entry = CommandHistoryEntry(res.cmd, res.ret, res.response)
+      let new_history = [entry, ..model.command_history] |> list.take(100)
+      #(Model(..model, command_history: new_history), effect.none())
     }
 
     // --- Control Plane Inspector ---
@@ -629,39 +555,24 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     }
 
     ClearControlEvents -> {
-      #(Model(..model, control_events: []), effect.none())
+      #(Model(..model, control_events: [], total_events: 0), effect.none())
     }
 
-    SetEventFilter(filter) -> {
-      #(Model(..model, event_filter: filter), effect.none())
+    SetEventFilter(filter_type) -> {
+      #(Model(..model, event_filter: filter_type), effect.none())
     }
 
     EmitTestUserEvent -> {
-      #(model, skred.execute_command("ce 42, 100, 200, 300"))
+      let cmd = "ce 42, 100, 200, 300"
+      #(model, skred.command(cmd))
     }
 
     RunControlCommand(cmd) -> {
-      let updated_history = case model.history_commands {
-        [first, ..rest] if first == cmd -> [cmd, ..rest]
-        others -> [cmd, ..others]
-      } |> list.take(50)
-
-      #(
-        Model(..model, history_commands: updated_history, history_index: -1),
-        skred.execute_command(cmd),
-      )
+      #(model, skred.command(cmd))
     }
 
     OnControlPlaneEvents(events) -> {
-      // 1. Advance sequencer playhead on PatternStep
-      let new_step = list.fold(events, model.current_step, fn(step_acc, item) {
-        case item.event {
-          skred.PatternStep(_, s) -> s
-          _ -> step_acc
-        }
-      })
-
-      // 2. Collect triggered and released voices to light up / unlight pads
+      // Collect triggered and released voices to light up / unlight pads
       let triggered_voices = list.filter_map(events, fn(item) {
         case item.event {
           skred.VoiceTrigger(v, _) -> Ok(v)
@@ -691,13 +602,11 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           })
       }
 
-      // 3. Update Control Plane diagnostic events buffer (if not paused)
-      let new_control_events = case model.stream_paused {
+      // Append new event details for live table inspection
+      let new_info_items = list.map(events, fn(e) { e.info })
+      let current_items = case model.stream_paused {
         True -> model.control_events
-        False -> {
-          let incoming_infos = list.map(events, fn(e) { e.info })
-          list.append(incoming_infos, model.control_events) |> list.take(100)
-        }
+        False -> list.append(new_info_items, model.control_events) |> list.take(150)
       }
 
       let new_total = model.total_events + list.length(events)
@@ -705,9 +614,8 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       #(
         Model(
           ..model,
-          current_step: new_step,
           pads: updated_pads,
-          control_events: new_control_events,
+          control_events: current_items,
           total_events: new_total,
         ),
         effect.none(),
@@ -717,18 +625,22 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 }
 
 // =============================================================================
-// VIEW
+// MAIN VIEW
 // =============================================================================
 
 fn view(model: Model) -> Element(Msg) {
   html.div([attribute.class("app-container")], [
-    view_header(model),
+    view_top_bar(model),
     view_main_workspace(model),
-    view_footer(model),
+    view_status_bar(model),
   ])
 }
 
-fn view_header(model: Model) -> Element(Msg) {
+// =============================================================================
+// TOP APP HEADER BAR
+// =============================================================================
+
+fn view_top_bar(model: Model) -> Element(Msg) {
   html.header([attribute.class("top-bar")], [
     html.div([attribute.class("brand")], [
       html.div([attribute.class("brand-logo")], [html.text("⬡")]),
@@ -738,7 +650,6 @@ fn view_header(model: Model) -> Element(Msg) {
       ]),
     ]),
 
-    // View Tabs Switcher
     html.div([attribute.class("view-tab-pills")], [
       html.button(
         [
@@ -748,7 +659,7 @@ fn view_header(model: Model) -> Element(Msg) {
           }),
           event.on_click(SetTab(StudioTab)),
         ],
-        [html.text("🎛️ STUDIO")],
+        [html.text("🎛️ PADS & SYNTH")],
       ),
       html.button(
         [
@@ -782,52 +693,23 @@ fn view_header(model: Model) -> Element(Msg) {
       ),
     ]),
 
-    html.div([attribute.class("transport-controls")], [
+    html.div([attribute.class("top-actions")], [
       html.button(
         [
-          attribute.class(case model.playing {
-            True -> "btn btn-play active"
-            False -> "btn btn-play"
-          }),
-          event.on_click(TogglePlay),
+          attribute.class("btn btn-clear"),
+          event.on_click(PanicAllNotesOff),
+          attribute.title("Kill all playing voices and silence engine (Opcode O)"),
         ],
-        [
-          html.span([attribute.class("btn-icon")], [
-            html.text(case model.playing {
-              True -> "⏹"
-              False -> "▶"
-            }),
-          ]),
-          html.span([], [
-            html.text(case model.playing {
-              True -> "STOP"
-              False -> "PLAY"
-            }),
-          ]),
-        ],
+        [html.text("⏹ PANIC (ALL OFF)")],
       ),
-
-      html.div([attribute.class("tempo-box")], [
-        html.label([], [html.text("BPM")]),
-        html.input([
-          attribute.type_("range"),
-          attribute.min("60"),
-          attribute.max("180"),
-          attribute.step("1"),
-          attribute.value(int.to_string(float.round(model.bpm))),
-          event.on_input(SetBpm),
-        ]),
-        html.span([attribute.class("tempo-display")], [
-          html.text(int.to_string(float.round(model.bpm))),
-        ]),
-      ]),
-
-      html.div([attribute.class("preset-buttons")], [
-        html.button([attribute.class("btn btn-sm"), event.on_click(LoadPreset("techno"))], [html.text("909 Techno")]),
-        html.button([attribute.class("btn btn-sm"), event.on_click(LoadPreset("industrial"))], [html.text("Industrial")]),
-        html.button([attribute.class("btn btn-sm"), event.on_click(LoadPreset("synthwave"))], [html.text("Synthwave")]),
-        html.button([attribute.class("btn btn-sm btn-clear"), event.on_click(ClearAll)], [html.text("Clear")]),
-      ]),
+      html.button(
+        [
+          attribute.class("btn btn-sm"),
+          event.on_click(ResetDefaultPads),
+          attribute.title("Reset 4x4 pads to default factory drum & synth assignments"),
+        ],
+        [html.text("↺ RESET PADS")],
+      ),
     ]),
   ])
 }
@@ -841,35 +723,13 @@ fn view_main_workspace(model: Model) -> Element(Msg) {
   }
 }
 
-// 1. Studio layout (Sequencer + MPC Pads + Synth Controls)
+// 1. Studio layout (Performance Pads + Pad Configurator + Synth Parameters)
 fn view_studio_layout(model: Model) -> Element(Msg) {
   html.div([attribute.class("content-grid")], [
-    html.section([attribute.class("panel sequencer-panel")], [
-      html.div([attribute.class("panel-header")], [
-        html.h2([], [html.text("16-STEP SEQUENCER")]),
-        html.div([attribute.class("step-counter")], [
-          html.text("STEP " <> int.to_string(model.current_step + 1) <> " / 16"),
-        ]),
-      ]),
-      view_sequencer_grid(model),
-    ]),
-
+    view_pads_panel(model),
     html.div([attribute.class("sidebar-column")], [
-      html.section([attribute.class("panel pads-panel")], [
-        html.div([attribute.class("panel-header")], [
-          html.h2([], [html.text("PERFORMANCE PADS")]),
-          html.span([attribute.class("badge")], [html.text("4x4 VELOCITY")]),
-        ]),
-        view_pad_grid(model),
-      ]),
-
-      html.section([attribute.class("panel synth-panel")], [
-        html.div([attribute.class("panel-header")], [
-          html.h2([], [html.text("SYNTH PARAMETERS")]),
-          html.span([attribute.class("badge")], [html.text("OPCODE MACROS")]),
-        ]),
-        view_synth_deck(model),
-      ]),
+      view_pad_configurator(model),
+      view_synth_deck(model),
     ]),
   ])
 }
@@ -889,37 +749,16 @@ fn view_console_fullscreen(model: Model) -> Element(Msg) {
   ])
 }
 
-// 4. Split Dashboard (Studio + Control Plane + Console together)
+// 4. Split Dashboard (Pads + Configurator + Control Plane + Console together)
 fn view_split_dashboard(model: Model) -> Element(Msg) {
   html.div([attribute.class("split-dashboard-grid")], [
-    // Top Left: 16-step sequencer
-    html.section([attribute.class("panel sequencer-panel")], [
-      html.div([attribute.class("panel-header")], [
-        html.h2([], [html.text("16-STEP SEQUENCER")]),
-        html.div([attribute.class("step-counter")], [
-          html.text("STEP " <> int.to_string(model.current_step + 1) <> " / 16"),
-        ]),
-      ]),
-      view_sequencer_grid(model),
-    ]),
+    // Top Left: 4x4 Performance Pads
+    view_pads_panel(model),
 
-    // Top Right: Pads & Synth
+    // Top Right: Pad Configurator & Synth Parameters
     html.div([attribute.class("sidebar-column")], [
-      html.section([attribute.class("panel pads-panel")], [
-        html.div([attribute.class("panel-header")], [
-          html.h2([], [html.text("PERFORMANCE PADS")]),
-          html.span([attribute.class("badge")], [html.text("4x4 VELOCITY")]),
-        ]),
-        view_pad_grid(model),
-      ]),
-
-      html.section([attribute.class("panel synth-panel")], [
-        html.div([attribute.class("panel-header")], [
-          html.h2([], [html.text("SYNTH PARAMETERS")]),
-          html.span([attribute.class("badge")], [html.text("OPCODES")]),
-        ]),
-        view_synth_deck(model),
-      ]),
+      view_pad_configurator(model),
+      view_synth_deck(model),
     ]),
 
     // Bottom Left: Live Control Plane Inspector Table
@@ -936,109 +775,64 @@ fn view_split_dashboard(model: Model) -> Element(Msg) {
 }
 
 // =============================================================================
-// SEQUENCER & PADS COMPONENTS
+// PERFORMANCE PADS & PAD CONFIGURATOR
 // =============================================================================
 
-fn view_sequencer_grid(model: Model) -> Element(Msg) {
-  html.div([attribute.class("grid-container")], [
-    // Step numbers header
-    html.div([attribute.class("grid-header-row")], [
-      html.div([attribute.class("track-info-header")], [html.text("TRACK")]),
-      html.div([attribute.class("step-indicators-row")], {
-        range(0, 15)
-        |> list.map(fn(s) {
-          let is_current = s == model.current_step
-          let is_beat = s % 4 == 0
-          html.div(
-            [
-              attribute.class(
-                "step-num"
-                <> case is_current {
-                  True -> " playhead"
-                  False -> ""
-                }
-                <> case is_beat {
-                  True -> " beat"
-                  False -> ""
-                },
-              ),
-            ],
-            [html.text(int.to_string(s + 1))],
-          )
-        })
-      }),
+fn view_pads_panel(model: Model) -> Element(Msg) {
+  html.section([attribute.class("panel pads-panel")], [
+    html.div([attribute.class("panel-header")], [
+      html.div([attribute.class("header-left")], [
+        html.h2([], [html.text("PERFORMANCE PADS")]),
+        html.span([attribute.class("badge")], [html.text("4x4 VELOCITY • HARDWARE LED FEEDBACK")]),
+      ]),
+      html.button(
+        [
+          attribute.class("btn btn-sm btn-clear"),
+          event.on_click(PanicAllNotesOff),
+        ],
+        [html.text("ALL OFF")],
+      ),
     ]),
-
-    // Track rows
-    html.div(
-      [attribute.class("tracks-container")],
-      list.index_map(model.tracks, fn(track, t_idx) {
-        html.div([attribute.class("track-row")], [
-          html.div([attribute.class("track-meta")], [
-            html.span([attribute.class("track-icon")], [html.text(track.icon)]),
-            html.span([attribute.class("track-name")], [html.text(track.name)]),
-            html.button(
-              [
-                attribute.class(case track.muted {
-                  True -> "btn-mute active"
-                  False -> "btn-mute"
-                }),
-                event.on_click(ToggleMute(t_idx)),
-              ],
-              [html.text("M")],
-            ),
-          ]),
-
-          html.div([attribute.class("steps-row")], {
-            list.index_map(track.steps, fn(is_active, s_idx) {
-              let is_playhead = s_idx == model.current_step
-              let is_beat = s_idx % 4 == 0
-
-              html.button(
-                [
-                  attribute.class(
-                    "step-btn"
-                    <> case is_active {
-                      True -> " active"
-                      False -> ""
-                    }
-                    <> case is_playhead {
-                      True -> " playhead-glow"
-                      False -> ""
-                    }
-                    <> case is_beat {
-                      True -> " beat-accent"
-                      False -> ""
-                    },
-                  ),
-                  attribute.style("--accent-color", track.color),
-                  event.on_click(ToggleStep(t_idx, s_idx)),
-                ],
-                [
-                  html.span([attribute.class("step-dot")], []),
-                ],
-              )
-            })
-          }),
-        ])
-      }),
-    ),
+    view_pad_grid(model),
   ])
 }
 
 fn view_pad_grid(model: Model) -> Element(Msg) {
   html.div([attribute.class("pads-grid")], {
     list.map(model.pads, fn(pad) {
+      let is_selected = pad.id == model.selected_pad_id
       html.button(
         [
-          attribute.class(case pad.active {
-            True -> "pad-btn active-pad"
-            False -> "pad-btn"
-          }),
+          attribute.class(
+            "pad-btn"
+            <> case pad.active {
+              True -> " active-pad"
+              False -> ""
+            }
+            <> case is_selected {
+              True -> " selected-pad"
+              False -> ""
+            },
+          ),
           attribute.style("--pad-color", pad.color),
-          event.on_click(TriggerPad(pad.id, pad.voice, pad.pitch)),
+          event.on_click(TriggerPad(pad.id)),
         ],
         [
+          html.div([attribute.class("pad-top-row")], [
+            html.span([attribute.class("pad-voice-tag")], [
+              html.text(case pad.custom_cmd != "" {
+                True -> "CMD"
+                False -> "v" <> int.to_string(pad.voice)
+              }),
+            ]),
+            html.span(
+              [
+                attribute.class("pad-edit-badge"),
+                attribute.title("Click to select & configure"),
+              ],
+              [html.text("⚙")],
+            ),
+          ]),
           html.div([attribute.class("pad-label")], [html.text(pad.label)]),
           html.div([attribute.class("pad-sub")], [html.text(pad.sub)]),
         ],
@@ -1047,63 +841,277 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
   })
 }
 
+fn view_pad_configurator(model: Model) -> Element(Msg) {
+  let selected_pad = list.find(model.pads, fn(p) { p.id == model.selected_pad_id })
+    |> result.unwrap(Pad(0, 0, "PAD", "", 440.0, "#ff3366", False, ""))
+
+  html.section([attribute.class("panel pad-config-panel")], [
+    html.div([attribute.class("panel-header")], [
+      html.div([attribute.class("header-left")], [
+        html.h2([], [html.text("PAD CONFIGURATOR")]),
+      ]),
+      html.button(
+        [
+          attribute.class("btn btn-sm btn-exec"),
+          event.on_click(TestPad(selected_pad.id)),
+        ],
+        [html.text("▶ TEST PAD")],
+      ),
+    ]),
+
+    // Selected Pad Info Card
+    html.div([attribute.class("config-selected-card")], [
+      html.div([attribute.class("selected-pad-title")], [
+        html.span(
+          [
+            attribute.class("pad-color-swatch-bullet"),
+            attribute.style("background-color", selected_pad.color),
+            attribute.style("color", selected_pad.color),
+          ],
+          [],
+        ),
+        html.text("PAD #" <> int.to_string(selected_pad.id + 1) <> " • " <> selected_pad.label),
+      ]),
+      html.span([attribute.class("badge")], [
+        html.text(case selected_pad.custom_cmd != "" {
+          True -> "CUSTOM CMD"
+          False -> "VOICE v" <> int.to_string(selected_pad.voice)
+        }),
+      ]),
+    ]),
+
+    // Quick Preset Templates
+    html.div([], [
+      html.div([attribute.class("section-label")], [html.text("QUICK SOUND TEMPLATES")]),
+      html.div([attribute.class("preset-chips-cloud")], {
+        list.map(pad_presets(), fn(preset) {
+          html.button(
+            [
+              attribute.class("chip-btn"),
+              event.on_click(ApplyPadPreset(selected_pad.id, preset.id)),
+            ],
+            [
+              html.span([], [html.text(preset.icon)]),
+              html.span([], [html.text(preset.name)]),
+            ],
+          )
+        })
+      }),
+    ]),
+
+    // Form controls grid
+    html.div([attribute.class("config-grid-2col")], [
+      html.div([attribute.class("config-row")], [
+        html.label([], [html.text("PAD NAME")]),
+        html.input([
+          attribute.class("config-text-input"),
+          attribute.type_("text"),
+          attribute.value(selected_pad.label),
+          event.on_input(fn(val) { UpdatePadLabel(selected_pad.id, val) }),
+        ]),
+      ]),
+
+      html.div([attribute.class("config-row")], [
+        html.label([], [html.text("SUBTITLE / NOTE")]),
+        html.input([
+          attribute.class("config-text-input"),
+          attribute.type_("text"),
+          attribute.value(selected_pad.sub),
+          event.on_input(fn(val) { UpdatePadSub(selected_pad.id, val) }),
+        ]),
+      ]),
+
+      html.div([attribute.class("config-row")], [
+        html.label([], [html.text("VOICE (0..255)")]),
+        html.input([
+          attribute.class("config-text-input"),
+          attribute.type_("number"),
+          attribute.value(int.to_string(selected_pad.voice)),
+          event.on_input(fn(val) { UpdatePadVoice(selected_pad.id, val) }),
+        ]),
+      ]),
+
+      html.div([attribute.class("config-row")], [
+        html.label([], [html.text("PITCH / TUNING (Hz / NOTE)")]),
+        html.input([
+          attribute.class("config-text-input"),
+          attribute.type_("number"),
+          attribute.value(float.to_string(selected_pad.pitch)),
+          event.on_input(fn(val) { UpdatePadPitch(selected_pad.id, val) }),
+        ]),
+      ]),
+
+      html.div([attribute.class("config-row full-width")], [
+        html.label([], [html.text("COLOR ACCENT")]),
+        html.div([attribute.class("color-swatches-box")], {
+          list.map(color_palette(), fn(c) {
+            let is_active = c == selected_pad.color
+            html.button(
+              [
+                attribute.class(case is_active {
+                  True -> "swatch-btn active"
+                  False -> "swatch-btn"
+                }),
+                attribute.style("background-color", c),
+                event.on_click(UpdatePadColor(selected_pad.id, c)),
+              ],
+              [],
+            )
+          })
+        }),
+      ]),
+
+      html.div([attribute.class("config-row full-width")], [
+        html.label([], [html.text("CUSTOM SKODE COMMAND (OPTIONAL OVERRIDE)")]),
+        html.input([
+          attribute.class("config-text-input"),
+          attribute.type_("text"),
+          attribute.placeholder("e.g. v0 l1, v8 n36 l1, or ce 42, 100, 200, 300"),
+          attribute.value(selected_pad.custom_cmd),
+          event.on_input(fn(val) { UpdatePadCustomCmd(selected_pad.id, val) }),
+        ]),
+        html.span([attribute.class("cmd-hint")], [
+          html.text("Leave blank to use default pitch trigger: v" <> int.to_string(selected_pad.voice) <> " f" <> float.to_string(selected_pad.pitch) <> " l1"),
+        ]),
+      ]),
+    ]),
+  ])
+}
+
 fn view_synth_deck(model: Model) -> Element(Msg) {
-  html.div([attribute.class("synth-controls")], [
-    html.div([attribute.class("slider-control")], [
-      html.div([attribute.class("slider-label-row")], [
-        html.label([], [html.text("CUTOFF FREQUENCY")]),
-        html.span([attribute.class("param-val")], [
-          html.text(int.to_string(float.round(model.cutoff)) <> " Hz"),
-        ]),
-      ]),
-      html.input([
-        attribute.type_("range"),
-        attribute.min("150"),
-        attribute.max("4500"),
-        attribute.step("25"),
-        attribute.value(int.to_string(float.round(model.cutoff))),
-        event.on_input(SetCutoff),
-      ]),
+  html.section([attribute.class("panel synth-panel")], [
+    html.div([attribute.class("panel-header")], [
+      html.h2([], [html.text("SYNTH PARAMETERS")]),
+      html.span([attribute.class("badge")], [html.text("OPCODES")]),
     ]),
-
-    html.div([attribute.class("slider-control")], [
-      html.div([attribute.class("slider-label-row")], [
-        html.label([], [html.text("FILTER RESONANCE")]),
-        html.span([attribute.class("param-val")], [
-          html.text(int.to_string(float.round(model.resonance *. 100.0)) <> "%"),
+    html.div([attribute.class("synth-controls")], [
+      html.div([attribute.class("slider-control")], [
+        html.div([attribute.class("slider-label-row")], [
+          html.label([], [html.text("CUTOFF FREQUENCY")]),
+          html.span([attribute.class("param-val")], [
+            html.text(int.to_string(float.round(model.cutoff)) <> " Hz"),
+          ]),
+        ]),
+        html.input([
+          attribute.type_("range"),
+          attribute.min("150"),
+          attribute.max("4500"),
+          attribute.step("25"),
+          attribute.value(int.to_string(float.round(model.cutoff))),
+          event.on_input(SetCutoff),
         ]),
       ]),
-      html.input([
-        attribute.type_("range"),
-        attribute.min("0.05"),
-        attribute.max("0.95"),
-        attribute.step("0.02"),
-        attribute.value(float.to_string(model.resonance)),
-        event.on_input(SetResonance),
-      ]),
-    ]),
 
-    html.div([attribute.class("slider-control")], [
-      html.div([attribute.class("slider-label-row")], [
-        html.label([], [html.text("MASTER OUTPUT LEVEL")]),
-        html.span([attribute.class("param-val")], [
-          html.text(int.to_string(float.round(model.volume *. 100.0)) <> "%"),
+      html.div([attribute.class("slider-control")], [
+        html.div([attribute.class("slider-label-row")], [
+          html.label([], [html.text("FILTER RESONANCE")]),
+          html.span([attribute.class("param-val")], [
+            html.text(int.to_string(float.round(model.resonance *. 100.0)) <> "%"),
+          ]),
+        ]),
+        html.input([
+          attribute.type_("range"),
+          attribute.min("0.05"),
+          attribute.max("0.95"),
+          attribute.step("0.02"),
+          attribute.value(float.to_string(model.resonance)),
+          event.on_input(SetResonance),
         ]),
       ]),
-      html.input([
-        attribute.type_("range"),
-        attribute.min("0.1"),
-        attribute.max("1.0"),
-        attribute.step("0.05"),
-        attribute.value(float.to_string(model.volume)),
-        event.on_input(SetVolume),
+
+      html.div([attribute.class("slider-control")], [
+        html.div([attribute.class("slider-label-row")], [
+          html.label([], [html.text("MASTER OUTPUT LEVEL")]),
+          html.span([attribute.class("param-val")], [
+            html.text(int.to_string(float.round(model.volume *. 100.0)) <> "%"),
+          ]),
+        ]),
+        html.input([
+          attribute.type_("range"),
+          attribute.min("0.1"),
+          attribute.max("1.0"),
+          attribute.step("0.05"),
+          attribute.value(float.to_string(model.volume)),
+          event.on_input(SetVolume),
+        ]),
       ]),
     ]),
   ])
 }
 
 // =============================================================================
-// CONTROL PLANE EVENTS INSPECTOR
+// REPL CONSOLE COMPONENT
+// =============================================================================
+
+fn view_console_panel(model: Model) -> Element(Msg) {
+  html.div([attribute.class("repl-container")], [
+    html.div([attribute.class("panel-header")], [
+      html.div([attribute.class("header-left")], [
+        html.h2([], [html.text("SKRED INTERACTIVE TERMINAL")]),
+        html.span([attribute.class("badge")], [html.text("ASCII REPL / OPCODES")]),
+      ]),
+      html.div([attribute.class("quick-chips")], [
+        html.button([attribute.class("chip"), event.on_click(RunQuickCommand("?v"))], [html.text("?v")]),
+        html.button([attribute.class("chip"), event.on_click(RunQuickCommand("?a"))], [html.text("?a")]),
+        html.button([attribute.class("chip"), event.on_click(RunQuickCommand("v0 ?"))], [html.text("v0 ?")]),
+        html.button([attribute.class("chip"), event.on_click(RunQuickCommand("?q"))], [html.text("?q (Queue)")]),
+        html.button([attribute.class("chip"), event.on_click(RunQuickCommand("?m"))], [html.text("?m (Macros)")]),
+        html.button([attribute.class("chip"), event.on_click(RunQuickCommand("v??"))], [html.text("v?? (Active)")]),
+      ]),
+    ]),
+
+    // Scrollable Console Output Feed
+    html.div([attribute.class("terminal-output")], {
+      list.reverse(model.command_history)
+      |> list.map(fn(entry) {
+        html.div([attribute.class("terminal-entry")], [
+          html.div([attribute.class("cmd-line")], [
+            html.span([attribute.class("cmd-prompt")], [html.text("> ")]),
+            html.span([attribute.class("cmd-text")], [html.text(entry.cmd)]),
+            html.span(
+              [
+                attribute.class(case entry.ret == 0 {
+                  True -> "ret-badge success"
+                  False -> "ret-badge error"
+                }),
+              ],
+              [html.text("rc: " <> int.to_string(entry.ret))],
+            ),
+          ]),
+          html.pre([attribute.class("cmd-response")], [
+            html.code([], [
+              html.text(case entry.response {
+                "" -> "(no output)"
+                out -> out
+              }),
+            ]),
+          ]),
+        ])
+      })
+    }),
+
+    // Command Input Bar
+    html.div([attribute.class("command-input-bar")], [
+      html.span([attribute.class("input-prompt")], [html.text(">")]),
+      html.input([
+        attribute.id("repl-cmd-input"),
+        attribute.class("cmd-input-field"),
+        attribute.type_("text"),
+        attribute.placeholder("Enter Skode command (press Enter to send, ↑/↓ for history)..."),
+        attribute.value(model.command_input),
+        event.on_input(SetCommandInput),
+        event.on_keydown(OnCommandKeyDown),
+      ]),
+      html.button(
+        [attribute.class("btn btn-exec"), event.on_click(SubmitCommand)],
+        [html.text("EXECUTE")],
+      ),
+    ]),
+  ])
+}
+
+// =============================================================================
+// CONTROL PLANE INSPECTOR COMPONENT
 // =============================================================================
 
 fn view_control_plane_header(model: Model) -> Element(Msg) {
@@ -1116,7 +1124,6 @@ fn view_control_plane_header(model: Model) -> Element(Msg) {
     ]),
 
     html.div([attribute.class("header-actions")], [
-      // Filter buttons
       html.div([attribute.class("filter-pill-group")], [
         html.button(
           [
@@ -1160,7 +1167,6 @@ fn view_control_plane_header(model: Model) -> Element(Msg) {
         ),
       ]),
 
-      // Actions
       html.button(
         [
           attribute.class(case model.stream_paused {
@@ -1169,34 +1175,28 @@ fn view_control_plane_header(model: Model) -> Element(Msg) {
           }),
           event.on_click(ToggleStreamPause),
         ],
-        [
-          html.text(case model.stream_paused {
-            True -> "▶ RESUME"
-            False -> "⏸ PAUSE"
-          }),
-        ],
+        [html.text(case model.stream_paused {
+          True -> "▶ RESUME"
+          False -> "⏸ PAUSE"
+        })],
       ),
 
       html.button(
         [attribute.class("btn btn-sm"), event.on_click(RunControlCommand("ce 42, 100, 200, 300"))],
         [html.text("EMIT ce 42")],
       ),
-
       html.button(
         [attribute.class("btn btn-sm"), event.on_click(RunControlCommand("ce 99, 1, 2, 3"))],
         [html.text("EMIT ce 99")],
       ),
-
       html.button(
         [attribute.class("btn btn-sm"), event.on_click(RunControlCommand("?ce"))],
         [html.text("?ce")],
       ),
-
       html.button(
         [attribute.class("btn btn-sm"), event.on_click(RunControlCommand("?ce!"))],
         [html.text("?ce!")],
       ),
-
       html.button(
         [attribute.class("btn btn-sm btn-clear"), event.on_click(ClearControlEvents)],
         [html.text("CLEAR TABLE")],
@@ -1206,18 +1206,18 @@ fn view_control_plane_header(model: Model) -> Element(Msg) {
 }
 
 fn view_control_plane_table(model: Model) -> Element(Msg) {
-  let filtered_events = model.control_events
-    |> list.filter(fn(info) {
-      case model.event_filter {
-        "VOICE" -> string.contains(info.type_name, "VOICE")
-        "STEP" -> string.contains(info.type_name, "PATTERN")
-        "USER" -> string.contains(info.type_name, "USER")
+  let filtered = model.control_events
+    |> list.filter(fn(item) {
+      let filter = model.event_filter
+      case filter {
+        "VOICE" -> string.contains(item.type_name, "VOICE")
+        "STEP" -> string.contains(item.type_name, "PATTERN")
+        "USER" -> string.contains(item.type_name, "USER")
         _ -> True
       }
     })
 
   html.div([attribute.class("events-table-wrapper")], [
-    // Control Plane Command Ribbon
     html.div([attribute.class("control-plane-ribbon")], [
       html.span([attribute.class("ribbon-label")], [html.text("CONTROL PLANE:")]),
       html.button(
@@ -1253,6 +1253,7 @@ fn view_control_plane_table(model: Model) -> Element(Msg) {
         [html.text("v0 vc1 (Voice Lifecycle)")],
       ),
     ]),
+
     html.table([attribute.class("events-table")], [
       html.thead([], [
         html.tr([], [
@@ -1267,49 +1268,50 @@ fn view_control_plane_table(model: Model) -> Element(Msg) {
         ]),
       ]),
       html.tbody([], {
-        case filtered_events {
+        case filtered {
           [] -> [
             html.tr([attribute.class("empty-row")], [
-              html.td([attribute.attribute("colspan", "8")], [
-                html.text("No control plane events in buffer. Start playback or tap pads to see events."),
+              html.td([attribute.colspan(8)], [
+                html.text("No control plane events in buffer. Tap pads or run commands to see events."),
               ]),
             ]),
           ]
-          _ -> list.map(filtered_events, fn(info) {
-            html.tr([attribute.class("event-row")], [
-              html.td([attribute.class("cell-seq")], [html.text("#" <> int.to_string(info.seq))]),
-              html.td([], [
-                html.span(
-                  [
-                    attribute.class("type-pill"),
-                    attribute.style("--type-color", info.color),
-                  ],
-                  [html.text(info.type_name)],
-                ),
-              ]),
-              html.td([], [
-                html.text(case info.voice >= 0 {
-                  True -> "v" <> int.to_string(info.voice)
-                  False -> "-"
-                }),
-              ]),
-              html.td([], [
-                html.text(case info.pattern >= 0 || info.step >= 0 {
-                  True -> "p" <> int.to_string(info.pattern) <> " : s" <> int.to_string(info.step)
-                  False -> "-"
-                }),
-              ]),
-              html.td([], [
-                html.text(case info.id != 0 {
-                  True -> int.to_string(info.id)
-                  False -> "-"
-                }),
-              ]),
-              html.td([attribute.class("cell-num")], [html.text(float.to_string(info.val0))]),
-              html.td([attribute.class("cell-num")], [html.text(float.to_string(info.val1))]),
-              html.td([attribute.class("cell-num")], [html.text(float.to_string(info.val2))]),
-            ])
-          })
+          items ->
+            list.map(items, fn(item) {
+              html.tr([attribute.class("event-row")], [
+                html.td([attribute.class("cell-seq")], [html.text("#" <> int.to_string(item.seq))]),
+                html.td([], [
+                  html.span(
+                    [
+                      attribute.class("type-pill"),
+                      attribute.style("--type-color", item.color),
+                    ],
+                    [html.text(item.type_name)],
+                  ),
+                ]),
+                html.td([], [
+                  html.text(case item.voice >= 0 {
+                    True -> "v" <> int.to_string(item.voice)
+                    False -> "-"
+                  }),
+                ]),
+                html.td([], [
+                  html.text(case item.pattern >= 0 || item.step >= 0 {
+                    True -> "p" <> int.to_string(item.pattern) <> " : s" <> int.to_string(item.step)
+                    False -> "-"
+                  }),
+                ]),
+                html.td([], [
+                  html.text(case item.id != 0 {
+                    True -> int.to_string(item.id)
+                    False -> "-"
+                  }),
+                ]),
+                html.td([attribute.class("cell-num")], [html.text(float.to_string(item.val0))]),
+                html.td([attribute.class("cell-num")], [html.text(float.to_string(item.val1))]),
+                html.td([attribute.class("cell-num")], [html.text(float.to_string(item.val2))]),
+              ])
+            })
         }
       }),
     ]),
@@ -1317,94 +1319,25 @@ fn view_control_plane_table(model: Model) -> Element(Msg) {
 }
 
 // =============================================================================
-// REPL CONSOLE COMPONENT
+// BOTTOM TELEMETRY STATUS BAR
 // =============================================================================
 
-fn view_console_panel(model: Model) -> Element(Msg) {
-  html.div([attribute.class("console-container")], [
-    html.div([attribute.class("panel-header")], [
-      html.div([attribute.class("header-left")], [
-        html.h2([], [html.text("SKRED / SKODE REPL CONSOLE")]),
-        html.span([attribute.class("badge-stream")], [html.text("ASCII PROTOCOL FFI")]),
-      ]),
-
-      html.div([attribute.class("quick-queries")], [
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?ce"))], [html.text("?ce Ring")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?ce!"))], [html.text("?ce! Flush")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("ce 42, 100, 200, 300"))], [html.text("ce 42 Marker")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("[v1 l1] /ceb 4 42"))], [html.text("/ceb Bind")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("/cer 1"))], [html.text("/cer 1 Dispatch")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("/ce!"))], [html.text("/ce! Unbind")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("/a?"))], [html.text("/a? Audio")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("?q"))], [html.text("?q Queue")]),
-        html.button([attribute.class("quick-pill"), event.on_click(RunQuickCommand("v0 ?"))], [html.text("v0 ? Kick")]),
-      ]),
-    ]),
-
-    // Terminal History Output
-    html.div([attribute.class("terminal-output")], {
-      list.map(model.command_history, fn(item) {
-        html.div([attribute.class("history-block")], [
-          html.div([attribute.class("history-cmd-line")], [
-            html.span([attribute.class("prompt-symbol")], [html.text(">")]),
-            html.span([attribute.class("prompt-cmd")], [html.text(item.cmd)]),
-            html.span(
-              [
-                attribute.class(case item.ret == 0 {
-                  True -> "ret-badge ok"
-                  False -> "ret-badge err"
-                }),
-              ],
-              [html.text("ret " <> int.to_string(item.ret))],
-            ),
-          ]),
-          html.pre([attribute.class("history-response")], [
-            html.text(case item.response {
-              "" -> "(empty response)\n"
-              resp -> resp
-            }),
-          ]),
-        ])
-      })
-    }),
-
-    // Command Input Bar
-    html.div([attribute.class("command-input-bar")], [
-      html.span([attribute.class("input-prompt")], [html.text(">")]),
-      html.input([
-        attribute.id("repl-cmd-input"),
-        attribute.class("cmd-input-field"),
-        attribute.type_("text"),
-        attribute.placeholder("Enter Skode command (press Enter to send, ↑/↓ for history)..."),
-        attribute.value(model.command_input),
-        event.on_input(SetCommandInput),
-        event.on_keydown(OnCommandKeyDown),
-      ]),
-      html.button(
-        [attribute.class("btn btn-exec"), event.on_click(SubmitCommand)],
-        [html.text("EXECUTE")],
-      ),
-    ]),
-  ])
-}
-
-// =============================================================================
-// FOOTER
-// =============================================================================
-
-fn view_footer(model: Model) -> Element(Msg) {
+fn view_status_bar(model: Model) -> Element(Msg) {
   html.footer([attribute.class("bottom-bar")], [
     html.div([attribute.class("telemetry-feed")], [
       html.span([attribute.class("status-led-pulse")], []),
       html.span([attribute.class("telemetry-title")], [html.text("SKRED ENGINE 0.79:")]),
       html.span([attribute.class("status-text")], [
-        html.text("ALSA 48 kHz • 256 VOICES • 16 PATTERNS (y0-y15) • 60 FPS EVENT DRAIN • BUFFERED: " <> int.to_string(list.length(model.control_events))),
+        html.text("ALSA 48 kHz • 256 VOICES • 16 CONFIGURABLE PADS • 60 FPS EVENT DRAIN • BUFFERED: " <> int.to_string(list.length(model.control_events))),
       ]),
     ]),
 
     html.div([attribute.class("stats-summary")], [
       html.span([], [
-        html.text("Events Processed: " <> int.to_string(model.total_events)),
+        html.text("TOTAL EVENTS: " <> int.to_string(model.total_events)),
+      ]),
+      html.span([], [
+        html.text("REPL CMDS: " <> int.to_string(list.length(model.command_history))),
       ]),
     ]),
   ])

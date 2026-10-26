@@ -1,8 +1,7 @@
 import gleam/json
 import gleam/list
-import gleam/string
 import gleeunit
-import lucy_osko.{Track}
+import lucy_osko.{Pad}
 import skred
 
 pub fn main() -> Nil {
@@ -61,49 +60,43 @@ pub fn decode_control_plane_diagnostics_test() {
   assert item.info.val2 == 30.0
 }
 
-pub fn compile_track_pattern_empty_step_15_test() {
-  // Empty track on voice 2 (Snare) should select pattern y2 and pin step 15 with [=127,0] x15
-  let empty_steps = list.repeat(False, times: 16)
-  let track = Track("Snare", "💥", 2, "#ff9900", empty_steps, False)
-  let cmd = lucy_osko.compile_track_pattern(track)
+pub fn default_pads_configuration_test() {
+  let pads = lucy_osko.default_pads()
+  assert list.length(pads) == 16
 
-  assert string.starts_with(cmd, "y2\nym0\n")
-  assert string.contains(cmd, "[=127,0] x15\n")
-  assert !string.contains(cmd, "v2 l1")
+  // Verify unique pad IDs from 0 to 15
+  let ids = list.map(pads, fn(p) { p.id })
+  assert ids == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+  // Verify first pad is Kick 909
+  let assert Ok(pad0) = list.first(pads)
+  assert pad0.label == "KICK"
+  assert pad0.voice == 0
 }
 
-pub fn compile_track_pattern_active_step_15_test() {
-  // Track on voice 4 with hit on step 15 should output [v4 l1] x15 without [=127,0] x15
-  let steps = [
-    False, False, False, False, False, False, False, False,
-    False, False, False, False, False, False, False, True,
-  ]
-  let track = Track("Hat", "⚡", 4, "#ffea00", steps, False)
-  let cmd = lucy_osko.compile_track_pattern(track)
+pub fn pad_presets_availability_test() {
+  let presets = lucy_osko.pad_presets()
+  assert list.length(presets) >= 16
 
-  assert string.starts_with(cmd, "y4\nym0\n")
-  assert string.contains(cmd, "[v4 l1] x15\n")
-  assert !string.contains(cmd, "=127,0")
+  // Find a specific preset like snare
+  let snare_preset = list.find(presets, fn(p) { p.id == "snare" })
+  let assert Ok(snare) = snare_preset
+  assert snare.voice == 2
+  assert snare.label == "SNARE"
 }
 
-pub fn compile_track_pattern_voice_0_includes_yc1_test() {
-  // Pattern 0 (Kick / master sync) should include yc1
-  let steps = list.repeat(False, times: 16)
-  let track = Track("Kick", "🥁", 0, "#ff3366", steps, False)
-  let cmd = lucy_osko.compile_track_pattern(track)
+pub fn custom_command_pad_test() {
+  let custom_pad = Pad(
+    id: 0,
+    voice: 0,
+    label: "TEST",
+    sub: "Cmd",
+    pitch: 440.0,
+    color: "#ff3366",
+    active: False,
+    custom_cmd: "ce 42, 100, 200, 300",
+  )
 
-  assert string.starts_with(cmd, "y0\nyc1\nym0\n")
-}
-
-pub fn compile_all_patterns_tempo_header_test() {
-  let steps = list.repeat(False, times: 16)
-  let tracks = [
-    Track("Kick", "🥁", 0, "#ff3366", steps, False),
-    Track("Snare", "💥", 2, "#ff9900", steps, False),
-  ]
-  let cmd = lucy_osko.compile_all_patterns(tracks, 128.0)
-
-  assert string.starts_with(cmd, "M 128 16\n")
-  assert string.contains(cmd, "y0\nyc1\n")
-  assert string.contains(cmd, "y2\n")
+  assert custom_pad.custom_cmd == "ce 42, 100, 200, 300"
+  assert custom_pad.label == "TEST"
 }
