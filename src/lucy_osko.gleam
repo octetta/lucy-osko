@@ -4,6 +4,7 @@
 //// and live Control Plane event inspector.
 
 import gleam/dict
+import gleam/dynamic/decode
 import gleam/float
 import gleam/int
 import gleam/list
@@ -459,7 +460,9 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     ReleasePad(pad_id) -> {
       let target_pad = list.find(model.pads, fn(p) { p.id == pad_id })
       let release_effect = case target_pad {
-        Ok(pad) if pad.custom_cmd == "" -> skred.release(pad.voice)
+        // Voices 0..7 are one-shot percussion: do not choke them with l0 on pad release
+        Ok(pad) if pad.voice >= 8 && pad.custom_cmd == "" ->
+          skred.release(pad.voice)
         _ -> effect.none()
       }
 
@@ -1205,9 +1208,12 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
             },
           ),
           attribute.style("--pad-color", pad.color),
-          event.on_mouse_down(TriggerPad(pad.id)),
-          event.on_mouse_up(ReleasePad(pad.id)),
-          event.on_mouse_leave(ReleasePad(pad.id)),
+          event.prevent_default(
+            event.on("pointerdown", decode.success(TriggerPad(pad.id))),
+          ),
+          event.on("pointerup", decode.success(ReleasePad(pad.id))),
+          event.on("pointerleave", decode.success(ReleasePad(pad.id))),
+          event.on("pointercancel", decode.success(ReleasePad(pad.id))),
         ],
         [
           html.div([attribute.class("pad-top-row")], [
@@ -1221,6 +1227,9 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
               [
                 attribute.class("pad-edit-badge"),
                 attribute.title("Click to select & configure"),
+                event.stop_propagation(
+                  event.on("pointerdown", decode.success(SelectPad(pad.id))),
+                ),
               ],
               [html.text("⚙")],
             ),

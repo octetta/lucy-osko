@@ -143,6 +143,7 @@ if (typeof win.addEventListener === "function") {
     ensureWasmEngine();
   };
   win.addEventListener("pointerdown", unlockAudio, { passive: true });
+  win.addEventListener("touchstart", unlockAudio, { passive: true });
   win.addEventListener("keydown", unlockAudio, { passive: true });
 }
 
