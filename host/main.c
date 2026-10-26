@@ -6,7 +6,19 @@
 #include <unistd.h>
 #include <limits.h>
 
+#if defined(__APPLE__)
+#ifndef WEBVIEW_COCOA
+#define WEBVIEW_COCOA 1
+#endif
+#include <CoreFoundation/CoreFoundation.h>
+#include <dispatch/dispatch.h>
+#elif !defined(WEBVIEW_WINAPI)
+#ifndef WEBVIEW_GTK
 #define WEBVIEW_GTK 1
+#endif
+#include <gtk/gtk.h>
+#endif
+
 #define WEBVIEW_IMPLEMENTATION
 #include "vendor/webview/webview.h"
 
@@ -14,6 +26,31 @@
 
 static volatile int g_running = 1;
 static struct webview g_webview;
+
+// Platform-independent helper to check if the webview is initialized and ready
+static int is_webview_ready(struct webview *w) {
+    if (!w || !w->priv.webview) return 0;
+#if defined(WEBVIEW_GTK)
+    return w->priv.ready;
+#else
+    return 1;
+#endif
+}
+
+// Platform-independent helper to evaluate JS without blocking the main event loop
+static void eval_js_nonblocking(struct webview *w, const char *script) {
+#if defined(WEBVIEW_GTK)
+    if (w && w->priv.webview) {
+#if WEBKIT_CHECK_VERSION(2, 40, 0)
+        webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, -1, NULL, NULL, NULL, NULL, NULL);
+#else
+        webkit_web_view_run_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, NULL, NULL, NULL);
+#endif
+    }
+#else
+    webview_eval(w, script);
+#endif
+}
 
 // Helper to extract a string field from simple JSON: {"action":"cmd","text":"..."}
 static int json_get_string(const char *json, const char *key, char *out, size_t out_size) {
@@ -104,19 +141,13 @@ static void json_escape(const char *src, char *out, size_t out_max) {
     out[j] = '\0';
 }
 
-// Dispatched to GTK main loop thread for command response (non-blocking async)
+// Dispatched to main loop thread for command response (non-blocking async)
 static void on_dispatch_cmd_response(struct webview *w, void *arg) {
     char *json = (char *)arg;
     if (json) {
         char *script = NULL;
         if (asprintf(&script, "window.__skred_on_command_response && window.__skred_on_command_response(%s);", json) != -1) {
-            if (w && w->priv.webview) {
-#if WEBKIT_CHECK_VERSION(2, 40, 0)
-                webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, -1, NULL, NULL, NULL, NULL, NULL);
-#else
-                webkit_web_view_run_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, NULL, NULL, NULL);
-#endif
-            }
+            eval_js_nonblocking(w, script);
             free(script);
         }
         free(json);
@@ -192,20 +223,35 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
     }
 }
 
-// Non-blocking control plane event drain directly on the GTK main loop
+// Non-blocking control plane event drain directly on the main event loop
+#if defined(WEBVIEW_GTK)
 static gboolean on_control_events_drain(gpointer userdata) {
+#else
+static void on_control_events_drain(void *userdata) {
+#endif
     struct webview *w = (struct webview *)userdata;
+#if defined(WEBVIEW_GTK)
     if (!g_running) return G_SOURCE_REMOVE;
+#else
+    if (!g_running) return;
+#endif
 
     skred_control_event_t events[128];
     int count = skred_control_event_poll(events, 128);
+#if defined(WEBVIEW_GTK)
     if (count <= 0) return G_SOURCE_CONTINUE;
-
-    if (!w || !w->priv.ready || !w->priv.webview) return G_SOURCE_CONTINUE;
+    if (!is_webview_ready(w)) return G_SOURCE_CONTINUE;
+#else
+    if (count <= 0 || !is_webview_ready(w)) return;
+#endif
 
     size_t buf_cap = (size_t)count * 128 + 32;
     char *json = (char *)malloc(buf_cap);
+#if defined(WEBVIEW_GTK)
     if (!json) return G_SOURCE_CONTINUE;
+#else
+    if (!json) return;
+#endif
 
     size_t offset = 0;
     json[offset++] = '[';
@@ -226,24 +272,24 @@ static gboolean on_control_events_drain(gpointer userdata) {
 
     char *script = NULL;
     if (asprintf(&script, "window.__skred_dispatch_batch && window.__skred_dispatch_batch(%s);", json) != -1) {
-#if WEBKIT_CHECK_VERSION(2, 40, 0)
-        webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, -1, NULL, NULL, NULL, NULL, NULL);
-#else
-        webkit_web_view_run_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, NULL, NULL, NULL);
-#endif
+        eval_js_nonblocking(w, script);
         free(script);
     }
     free(json);
+#if defined(WEBVIEW_GTK)
     return G_SOURCE_CONTINUE;
+#endif
 }
 
-// Watch callback for POSIX selectable control-event wait fd
+#if defined(WEBVIEW_GTK)
+// Watch callback for POSIX selectable control-event wait fd (GTK/GLib)
 static gboolean on_control_fd_ready(GIOChannel *source, GIOCondition condition, gpointer data) {
     (void)source;
     (void)condition;
     on_control_events_drain(data);
     return TRUE; // keep watch active
 }
+#endif
 
 static int on_webview_close(struct webview *w) {
     (void)w;
@@ -318,31 +364,55 @@ int main(int argc, char **argv) {
     init_synth_engine();
     printf("[LUCY+OSKO] Skred engine ready (%s)\n", skred_version());
 
-    // Resolve URL to load (find dist/index.html relative to exe or cwd)
+    // Resolve URL to load (find dist/index.html relative to bundle, exe, or cwd)
     char url[PATH_MAX * 2] = {0};
     if (argc > 1 && strstr(argv[1], "://")) {
         snprintf(url, sizeof(url), "%s", argv[1]);
     } else {
-        char candidate[PATH_MAX * 2] = {0};
-        char exe_path[PATH_MAX] = {0};
-        ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-        if (len > 0) {
-            exe_path[len] = '\0';
-            char *last_slash = strrchr(exe_path, '/');
-            if (last_slash) {
-                *last_slash = '\0'; // strip binary name
-                // Check exe_dir/../dist/index.html
-                snprintf(candidate, sizeof(candidate), "%s/../dist/index.html", exe_path);
-                char resolved[PATH_MAX];
-                if (realpath(candidate, resolved) && access(resolved, R_OK) == 0) {
-                    snprintf(url, sizeof(url), "file://%s", resolved);
+#if defined(__APPLE__)
+        CFBundleRef mainBundle = CFBundleGetMainBundle();
+        CFURLRef resourcesURL = mainBundle ? CFBundleCopyResourcesDirectoryURL(mainBundle) : NULL;
+        char res_path[PATH_MAX] = {0};
+        if (resourcesURL) {
+            if (CFURLGetFileSystemRepresentation(resourcesURL, true, (UInt8 *)res_path, sizeof(res_path))) {
+                char cand[PATH_MAX * 2];
+                snprintf(cand, sizeof(cand), "%s/dist/index.html", res_path);
+                if (access(cand, R_OK) == 0) {
+                    snprintf(url, sizeof(url), "file://%s", cand);
+                } else {
+                    snprintf(cand, sizeof(cand), "%s/index.html", res_path);
+                    if (access(cand, R_OK) == 0) {
+                        snprintf(url, sizeof(url), "file://%s", cand);
+                    }
                 }
             }
+            CFRelease(resourcesURL);
+        }
+#endif
+        if (!url[0]) {
+            char candidate[PATH_MAX * 2] = {0};
+            char exe_path[PATH_MAX] = {0};
+#if defined(__linux__)
+            ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+            if (len > 0) {
+                exe_path[len] = '\0';
+                char *last_slash = strrchr(exe_path, '/');
+                if (last_slash) {
+                    *last_slash = '\0'; // strip binary name
+                    snprintf(candidate, sizeof(candidate), "%s/../dist/index.html", exe_path);
+                    char resolved[PATH_MAX];
+                    if (realpath(candidate, resolved) && access(resolved, R_OK) == 0) {
+                        snprintf(url, sizeof(url), "file://%s", resolved);
+                    }
+                }
+            }
+#endif
         }
 
         if (!url[0]) {
             char cwd[PATH_MAX];
             if (getcwd(cwd, sizeof(cwd))) {
+                char candidate[PATH_MAX];
                 snprintf(candidate, sizeof(candidate), "%s/dist/index.html", cwd);
                 if (access(candidate, R_OK) == 0) {
                     snprintf(url, sizeof(url), "file://%s", candidate);
@@ -372,6 +442,27 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+#if defined(__APPLE__)
+    // Native non-blocking event-loop integration via Apple GCD
+    int ce_fd = skred_control_event_wait_fd();
+    if (ce_fd >= 0) {
+        dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, ce_fd, 0, dispatch_get_main_queue());
+        if (src) {
+            dispatch_source_set_event_handler(src, ^{
+                on_control_events_drain(&g_webview);
+            });
+            dispatch_resume(src);
+        }
+    }
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    if (timer) {
+        dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC), 16 * NSEC_PER_MSEC, 2 * NSEC_PER_MSEC);
+        dispatch_source_set_event_handler(timer, ^{
+            on_control_events_drain(&g_webview);
+        });
+        dispatch_resume(timer);
+    }
+#elif defined(WEBVIEW_GTK)
     // Native non-blocking control plane integration with GTK/GLib event loop
     int ce_fd = skred_control_event_wait_fd();
     if (ce_fd >= 0) {
@@ -383,6 +474,7 @@ int main(int argc, char **argv) {
     }
     // High-resolution non-blocking 16ms poll timer on the GTK main loop
     g_timeout_add(16, on_control_events_drain, &g_webview);
+#endif
 
     // Run webview event loop until window is closed
     while (g_running && webview_loop(&g_webview, 1) == 0) {

@@ -151,6 +151,35 @@ Builds both the native desktop binary and the web distribution in a single step.
 
 ---
 
+### Target 4: Packaging & Multi-Platform Distribution
+
+#### Package for Current Platform
+```bash
+make packages
+```
+Builds the standalone distribution packages for your operating system and web:
+- **Linux**: Produces `dist/lucy-osko-linux-x86_64.tar.gz` containing the binary and assets.
+- **macOS**: Assembles a signed universal application bundle `LUCY+OSKO.app` in `dist/lucy-osko-macos-universal.zip`.
+- **Web**: Creates static distribution archive `dist/lucy-osko-web.zip`.
+
+Individual package targets:
+```bash
+make linux-package    # Linux .tar.gz bundle
+make macos-package    # macOS signed .app .zip bundle
+make web-package      # Static Web .zip bundle
+```
+
+---
+
+### Target 5: Automated GitHub Actions Releases
+
+The repository includes a multi-platform release workflow ([`.github/workflows/release.yml`](file:///home/stewartj/book/lucy-osko/.github/workflows/release.yml)). When triggered (by pushing a `v*` tag or via manual workflow dispatch):
+1. **Frontend Job**: Builds the Gleam/Lustre bundle (`dist/app.min.js`) and verifies all 18 test assertions.
+2. **Matrix Build Jobs**: Runs parallel builds on `ubuntu-latest` (Linux) and `macos-latest` (macOS Universal arm64/x86_64 `.app`).
+3. **Publish Job**: Computes SHA256 checksums and creates a GitHub Release with all platform artifacts attached.
+
+---
+
 ### Run Unit Tests
 
 ```bash

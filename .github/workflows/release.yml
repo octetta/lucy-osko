@@ -1,0 +1,170 @@
+name: Multi-Platform Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v0.2.0). Required for manual trigger.'
+        required: true
+        default: 'v0.2.0'
+      skred_version:
+        description: 'Skred version to pull from octetta/pulp (default: from SKRED_VERSION file)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-frontend:
+    name: Build Frontend (Gleam + Lustre)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup toolchain via mise
+        uses: jdx/mise-action@v2
+
+      - name: Build frontend bundle
+        run: |
+          mise exec -- gleam build --target javascript
+          mkdir -p dist
+          cp src/entry.mjs build/dev/javascript/lucy_osko/entry.mjs
+          mise exec -- npx --yes esbuild build/dev/javascript/lucy_osko/entry.mjs --bundle --minify --format=iife --outfile=dist/app.min.js
+
+      - name: Run Gleam tests
+        run: mise exec -- gleam test
+
+      - name: Upload frontend bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: |
+            dist/index.html
+            dist/app.min.js
+          if-no-files-found: error
+
+  build-desktop:
+    name: Build Desktop (${{ matrix.platform }})
+    needs: build-frontend
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: macos-latest
+            platform: macos-universal
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+
+      - name: Resolve Skred version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.skred_version }}" ]; then
+            SKRED="${{ github.event.inputs.skred_version }}"
+          else
+            SKRED="$(cat SKRED_VERSION | tr -d '[:space:]')"
+          fi
+          echo "skred=$SKRED" >> "$GITHUB_OUTPUT"
+          echo "Using Skred audio engine version: $SKRED"
+
+      # Linux dependencies and packaging
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config curl zip \
+            libgtk-3-dev libasound2-dev
+          sudo apt-get install -y libwebkit2gtk-4.0-dev || sudo apt-get install -y libwebkit2gtk-4.1-dev
+
+      - name: Build and package Linux Desktop & Web
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          python3 scripts/fetch_skred.py --version ${{ steps.ver.outputs.skred }} --force
+          make linux-package web-package
+
+      # macOS packaging (Universal .app signed)
+      - name: Build and package macOS Universal .app
+        if: matrix.platform == 'macos-universal'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          python3 scripts/fetch_skred.py --version ${{ steps.ver.outputs.skred }} --force
+          make macos-package CFLAGS="-O2 -arch arm64 -arch x86_64"
+
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: build-desktop
+    runs-on: ubuntu-latest
+    if: always() && needs.build-desktop.result == 'success'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+          pattern: release-*
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          name: LUCY+OSKO ${{ github.event.inputs.tag_name || github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            artifacts/*
+          body: |
+            ### LUCY+OSKO Multi-Platform Release ⬡
+
+            Single-source Elm Architecture (Gleam + Lustre) running on native desktop and zero-install web.
+
+            | Platform | File | Description |
+            | :--- | :--- | :--- |
+            | **macOS Universal** | `lucy-osko-macos-universal.zip` | Standalone signed `LUCY+OSKO.app` (Apple Silicon & Intel) |
+            | **Linux x86_64** | `lucy-osko-linux-x86_64.tar.gz` | Native desktop binary with ALSA audio & WebKitGTK |
+            | **Web Browser** | `lucy-osko-web.zip` | Static web deployment with Skred WASM & Web Audio |
+
+            Checksums are provided in `SHA256SUMS`.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

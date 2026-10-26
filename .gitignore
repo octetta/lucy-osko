@@ -5,4 +5,8 @@ erl_crash.dump
 /bin
 node_modules
 host/vendor/skred/.skred_version
+dist/*.tar.gz
+dist/*.zip
+dist/*-linux-*
+
 
