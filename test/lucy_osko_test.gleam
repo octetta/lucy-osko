@@ -212,3 +212,75 @@ pub fn shared_command_history_between_repl_and_pad_test() {
     lucy_osko.update(model5, lucy_osko.OnCommandKeyDown("ArrowUp"))
   assert model6.command_input == "v15 n72 l1"
 }
+
+pub fn pad_touch_hold_and_release_test() {
+  let #(model0, _) = lucy_osko.init(Nil)
+  assert model0.held_pads == []
+
+  // Physical touch press on Pad 0 (Kick)
+  let #(model1, _) = lucy_osko.update(model0, lucy_osko.TriggerPad(0))
+  let assert Ok(pad0_pressed) = list.find(model1.pads, fn(p) { p.id == 0 })
+  assert pad0_pressed.active == True
+  assert model1.held_pads == [0]
+
+  // Physical touch release on Pad 0
+  let #(model2, _) = lucy_osko.update(model1, lucy_osko.ReleasePad(0))
+  let assert Ok(pad0_released) = list.find(model2.pads, fn(p) { p.id == 0 })
+  assert pad0_released.active == False
+  assert model2.held_pads == []
+}
+
+pub fn control_plane_voice_finished_does_not_unlight_held_pad_test() {
+  let #(model0, _) = lucy_osko.init(Nil)
+
+  // User presses and holds Pad 0
+  let #(model1, _) = lucy_osko.update(model0, lucy_osko.TriggerPad(0))
+  let assert Ok(pad0_held) = list.find(model1.pads, fn(p) { p.id == 0 })
+  assert pad0_held.active == True
+  assert list.contains(model1.held_pads, 0)
+
+  // Skred completes sample playback and emits VoiceFinished for voice 0
+  let finish_json =
+    "[{\"t\":3,\"v\":0,\"p\":-1,\"s\":-1,\"id\":0,\"vals\":[0.0,0.0,0.0]}]"
+  let assert Ok(events) =
+    json.parse(from: finish_json, using: skred.control_plane_decoder())
+
+  let #(model2, _) =
+    lucy_osko.update(model1, lucy_osko.OnControlPlaneEvents(events))
+
+  // Pad 0 MUST remain active/illuminated while the user is physically holding it!
+  let assert Ok(pad0_still_held) = list.find(model2.pads, fn(p) { p.id == 0 })
+  assert pad0_still_held.active == True
+
+  // When user finally lifts finger, ReleasePad unlights it
+  let #(model3, _) = lucy_osko.update(model2, lucy_osko.ReleasePad(0))
+  let assert Ok(pad0_after_lift) = list.find(model3.pads, fn(p) { p.id == 0 })
+  assert pad0_after_lift.active == False
+  assert model3.held_pads == []
+}
+
+pub fn control_plane_voice_finished_unlights_non_held_pad_test() {
+  let #(model0, _) = lucy_osko.init(Nil)
+
+  // Sequencer/script triggers voice 0 (not held by user)
+  let trigger_json =
+    "[{\"t\":1,\"v\":0,\"p\":-1,\"s\":-1,\"id\":0,\"vals\":[0.9,0.0,0.0]}]"
+  let assert Ok(trig_events) =
+    json.parse(from: trigger_json, using: skred.control_plane_decoder())
+  let #(model1, _) =
+    lucy_osko.update(model0, lucy_osko.OnControlPlaneEvents(trig_events))
+  let assert Ok(pad0_active) = list.find(model1.pads, fn(p) { p.id == 0 })
+  assert pad0_active.active == True
+
+  // Sequencer/sample playback finishes
+  let finish_json =
+    "[{\"t\":3,\"v\":0,\"p\":-1,\"s\":-1,\"id\":0,\"vals\":[0.0,0.0,0.0]}]"
+  let assert Ok(fin_events) =
+    json.parse(from: finish_json, using: skred.control_plane_decoder())
+  let #(model2, _) =
+    lucy_osko.update(model1, lucy_osko.OnControlPlaneEvents(fin_events))
+
+  // Non-held pad is extinguished by VoiceFinished
+  let assert Ok(pad0_finished) = list.find(model2.pads, fn(p) { p.id == 0 })
+  assert pad0_finished.active == False
+}

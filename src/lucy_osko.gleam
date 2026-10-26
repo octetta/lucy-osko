@@ -75,6 +75,7 @@ pub type Model {
     active_tab: ViewTab,
     selected_pad_id: Int,
     pads: List(Pad),
+    held_pads: List(Int),
     cutoff: Float,
     resonance: Float,
     volume: Float,
@@ -366,6 +367,7 @@ pub fn init(_) -> #(Model, Effect(Msg)) {
       active_tab: SplitTab,
       selected_pad_id: 0,
       pads: default_pads(),
+      held_pads: [],
       cutoff: 750.0,
       resonance: 0.65,
       volume: 0.85,
@@ -442,6 +444,11 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
         Error(_) -> effect.none()
       }
 
+      let updated_held = case list.contains(model.held_pads, pad_id) {
+        True -> model.held_pads
+        False -> [pad_id, ..model.held_pads]
+      }
+
       let updated_pads =
         model.pads
         |> list.map(fn(pad) {
@@ -452,12 +459,19 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
         })
 
       #(
-        Model(..model, pads: updated_pads, selected_pad_id: pad_id),
+        Model(
+          ..model,
+          pads: updated_pads,
+          held_pads: updated_held,
+          selected_pad_id: pad_id,
+        ),
         trigger_effect,
       )
     }
 
     ReleasePad(pad_id) -> {
+      let updated_held = list.filter(model.held_pads, fn(id) { id != pad_id })
+
       let target_pad = list.find(model.pads, fn(p) { p.id == pad_id })
       let release_effect = case target_pad {
         // Voices 0..7 are one-shot percussion: do not choke them with l0 on pad release
@@ -475,7 +489,10 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           }
         })
 
-      #(Model(..model, pads: updated_pads), release_effect)
+      #(
+        Model(..model, pads: updated_pads, held_pads: updated_held),
+        release_effect,
+      )
     }
 
     TestPad(pad_id) -> {
@@ -767,14 +784,25 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     }
 
     ResetDefaultPads -> {
-      #(Model(..model, pads: default_pads(), selected_pad_id: 0), effect.none())
+      #(
+        Model(
+          ..model,
+          pads: default_pads(),
+          held_pads: [],
+          selected_pad_id: 0,
+        ),
+        effect.none(),
+      )
     }
 
     PanicAllNotesOff -> {
       let updated_pads =
         model.pads
         |> list.map(fn(pad) { Pad(..pad, active: False) })
-      #(Model(..model, pads: updated_pads), skred.command("O Z0"))
+      #(
+        Model(..model, pads: updated_pads, held_pads: []),
+        skred.command("O Z0"),
+      )
     }
 
     SetCutoff(str_val) -> {
@@ -980,7 +1008,12 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           model.pads
           |> list.map(fn(pad) {
             case dict.get(voice_states, pad.voice) {
-              Ok(active_state) -> Pad(..pad, active: active_state)
+              Ok(True) -> Pad(..pad, active: True)
+              Ok(False) ->
+                case list.contains(model.held_pads, pad.id) {
+                  True -> pad
+                  False -> Pad(..pad, active: False)
+                }
               Error(_) -> pad
             }
           })
@@ -1212,7 +1245,6 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
             event.on("pointerdown", decode.success(TriggerPad(pad.id))),
           ),
           event.on("pointerup", decode.success(ReleasePad(pad.id))),
-          event.on("pointerleave", decode.success(ReleasePad(pad.id))),
           event.on("pointercancel", decode.success(ReleasePad(pad.id))),
         ],
         [
@@ -1226,10 +1258,7 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
             html.span(
               [
                 attribute.class("pad-edit-badge"),
-                attribute.title("Click to select & configure"),
-                event.stop_propagation(
-                  event.on("pointerdown", decode.success(SelectPad(pad.id))),
-                ),
+                attribute.title("Selected pad"),
               ],
               [html.text("⚙")],
             ),

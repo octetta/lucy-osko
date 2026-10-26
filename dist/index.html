@@ -387,6 +387,10 @@
       -webkit-touch-callout: none;
     }
 
+    .pad-btn * {
+      pointer-events: none;
+    }
+
     .pad-btn:hover {
       border-color: var(--pad-color, #fff);
       background: #202738;
@@ -1008,5 +1012,28 @@
   <div id="app"></div>
   <script src="skred_api.js"></script>
   <script src="app.min.js"></script>
+  <script>
+    // Ensure WebAudio is resumed on any initial user touch or interaction
+    function unlockAudio() {
+      if (window.Module) {
+        if (window.Module.audioContext && window.Module.audioContext.state === "suspended") {
+          window.Module.audioContext.resume();
+        }
+      }
+      if (window.AL && window.AL.currentCtx && window.AL.currentCtx.audioCtx && window.AL.currentCtx.audioCtx.state === "suspended") {
+        window.AL.currentCtx.audioCtx.resume();
+      }
+    }
+    window.addEventListener("pointerdown", unlockAudio, { passive: true });
+    window.addEventListener("touchstart", unlockAudio, { passive: true });
+
+    // Performance pad pointer capture: keeps touches locked to pad button even during rapid finger taps/wobbles
+    document.addEventListener("pointerdown", (e) => {
+      const btn = e.target.closest && e.target.closest(".pad-btn");
+      if (btn && btn.setPointerCapture) {
+        try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+    }, { passive: true });
+  </script>
 </body>
 </html>
