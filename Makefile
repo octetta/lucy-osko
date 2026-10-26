@@ -16,11 +16,11 @@ SKRED_LIB = $(HOST_DIR)/vendor/skred/lib/libapi.a
 GTK_CFLAGS = $(shell pkg-config --cflags gtk+-3.0 webkit2gtk-4.0)
 GTK_LIBS = $(shell pkg-config --libs gtk+-3.0 webkit2gtk-4.0 alsa) -lm -lpthread -ldl
 
-.PHONY: all build frontend host run dev clean format
+.PHONY: all build frontend desktop host web run dev serve clean format
 
 all: build
 
-build: frontend host
+build: desktop web
 
 # 1. Compile Gleam frontend and bundle to dist/
 frontend:
@@ -29,7 +29,9 @@ frontend:
 	@cp src/entry.mjs build/dev/javascript/lucy_osko/entry.mjs
 	$(MISE) npx --yes esbuild build/dev/javascript/lucy_osko/entry.mjs --bundle --minify --format=iife --outfile=$(DIST_DIR)/app.min.js
 
-# 2. Compile native C webview host
+# 2. Compile native C webview host (Desktop target)
+desktop: frontend host
+
 host: $(TARGET)
 
 $(TARGET): $(HOST_DIR)/main.c $(SKRED_LIB)
@@ -37,14 +39,24 @@ $(TARGET): $(HOST_DIR)/main.c $(SKRED_LIB)
 	$(CC) $(CFLAGS) $(GTK_CFLAGS) $(SKRED_INC) $(WEBVIEW_INC) \
 		$< $(SKRED_LIB) $(GTK_LIBS) -o $@
 
+# 3. Web target: Bundle frontend and sync WASM audio engine assets
+web: frontend
+	@mkdir -p $(DIST_DIR)
+	@if [ -d "../pulp/parts/build_wasm" ]; then \
+		cp -u ../pulp/parts/build_wasm/skred_api.js $(DIST_DIR)/ 2>/dev/null || true; \
+		cp -u ../pulp/parts/build_wasm/skred_api.wasm $(DIST_DIR)/ 2>/dev/null || true; \
+	fi
+	@echo "Web distribution ready in $(DIST_DIR)/"
+
 # Run native desktop application
-run: build
+run: desktop
 	./$(TARGET)
 
-# Run in web browser (uses FFI mock driver for fast frontend iteration)
-dev: frontend
-	@echo "Starting development web server at http://localhost:8080..."
-	python3 -m http.server 8080 -d $(DIST_DIR)
+# Run web version locally with COOP/COEP headers (for WebAssembly pthreads & AudioWorklet)
+dev: serve
+
+serve: web
+	python3 scripts/serve.py 8080 $(DIST_DIR)
 
 format:
 	$(MISE) gleam format
