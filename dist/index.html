@@ -402,7 +402,7 @@
       box-shadow: 0 0 14px rgba(0, 229, 255, 0.4), inset 0 0 8px rgba(0, 229, 255, 0.15);
     }
 
-    .pad-btn:active, .pad-btn.active-pad {
+    .pad-btn.active-pad {
       background: var(--pad-color, #fff);
       border-color: #fff;
       box-shadow: 0 0 24px var(--pad-color, #fff);
@@ -1027,13 +1027,67 @@
     window.addEventListener("pointerdown", unlockAudio, { passive: true });
     window.addEventListener("touchstart", unlockAudio, { passive: true });
 
-    // Performance pad pointer capture: keeps touches locked to pad button even during rapid finger taps/wobbles
+    // Robust Performance Pad Pointer & Touch Tracking
+    // Prevents performance pads from ever getting stuck as pressed on touchscreens
+    const activePadPointers = new Map(); // pointerId -> padBtn
+
     document.addEventListener("pointerdown", (e) => {
       const btn = e.target.closest && e.target.closest(".pad-btn");
-      if (btn && btn.setPointerCapture) {
-        try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+      if (btn) {
+        activePadPointers.set(e.pointerId, btn);
+        if (btn.setPointerCapture) {
+          try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+        }
+      }
+    }, { capture: true, passive: true });
+
+    function releasePointerPad(pointerId) {
+      const btn = activePadPointers.get(pointerId);
+      if (btn) {
+        activePadPointers.delete(pointerId);
+        btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: pointerId }));
+      }
+    }
+
+    function releaseAllActivePads() {
+      activePadPointers.clear();
+      document.querySelectorAll(".pad-btn.active-pad").forEach((btn) => {
+        btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+      });
+    }
+
+    // Global window listeners for pointer release, cancel, and capture loss
+    window.addEventListener("pointerup", (e) => {
+      releasePointerPad(e.pointerId);
+      if (e.pointerType === "mouse" && e.buttons === 0) {
+        releaseAllActivePads();
+      }
+    }, { capture: true, passive: true });
+
+    window.addEventListener("pointercancel", (e) => {
+      releasePointerPad(e.pointerId);
+    }, { capture: true, passive: true });
+
+    window.addEventListener("lostpointercapture", (e) => {
+      releasePointerPad(e.pointerId);
+    }, { capture: true, passive: true });
+
+    // Touch event fallbacks for touchscreens / multi-touch
+    window.addEventListener("touchend", (e) => {
+      if (!e.touches || e.touches.length === 0) {
+        releaseAllActivePads();
       }
     }, { passive: true });
+
+    window.addEventListener("touchcancel", (e) => {
+      if (!e.touches || e.touches.length === 0) {
+        releaseAllActivePads();
+      }
+    }, { passive: true });
+
+    window.addEventListener("blur", () => {
+      releaseAllActivePads();
+    });
   </script>
 </body>
 </html>

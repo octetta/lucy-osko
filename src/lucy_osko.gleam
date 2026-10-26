@@ -101,6 +101,7 @@ pub type Msg {
   SelectPad(pad_id: Int)
   TriggerPad(pad_id: Int)
   ReleasePad(pad_id: Int)
+  ReleaseAllPads
   UpdatePadLabel(pad_id: Int, label: String)
   UpdatePadSub(pad_id: Int, sub: String)
   UpdatePadVoice(pad_id: Int, voice_str: String)
@@ -492,6 +493,26 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       #(
         Model(..model, pads: updated_pads, held_pads: updated_held),
         release_effect,
+      )
+    }
+
+    ReleaseAllPads -> {
+      let release_effects =
+        model.pads
+        |> list.filter(fn(pad) {
+          pad.voice >= 8
+          && pad.custom_cmd == ""
+          && list.contains(model.held_pads, pad.id)
+        })
+        |> list.map(fn(pad) { skred.release(pad.voice) })
+
+      let updated_pads =
+        model.pads
+        |> list.map(fn(pad) { Pad(..pad, active: False) })
+
+      #(
+        Model(..model, pads: updated_pads, held_pads: []),
+        effect.batch(release_effects),
       )
     }
 
@@ -1007,14 +1028,22 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
         False ->
           model.pads
           |> list.map(fn(pad) {
-            case dict.get(voice_states, pad.voice) {
-              Ok(True) -> Pad(..pad, active: True)
-              Ok(False) ->
+            case pad.custom_cmd == "" {
+              True ->
+                case dict.get(voice_states, pad.voice) {
+                  Ok(True) -> Pad(..pad, active: True)
+                  Ok(False) ->
+                    case list.contains(model.held_pads, pad.id) {
+                      True -> pad
+                      False -> Pad(..pad, active: False)
+                    }
+                  Error(_) -> pad
+                }
+              False ->
                 case list.contains(model.held_pads, pad.id) {
                   True -> pad
                   False -> Pad(..pad, active: False)
                 }
-              Error(_) -> pad
             }
           })
       }
@@ -1224,29 +1253,36 @@ fn view_pads_panel(model: Model) -> Element(Msg) {
 }
 
 fn view_pad_grid(model: Model) -> Element(Msg) {
-  html.div([attribute.class("pads-grid")], {
-    list.map(model.pads, fn(pad) {
-      let is_selected = pad.id == model.selected_pad_id
-      html.button(
-        [
-          attribute.class(
-            "pad-btn"
-            <> case pad.active {
-              True -> " active-pad"
-              False -> ""
-            }
-            <> case is_selected {
-              True -> " selected-pad"
-              False -> ""
-            },
-          ),
-          attribute.style("--pad-color", pad.color),
-          event.prevent_default(
-            event.on("pointerdown", decode.success(TriggerPad(pad.id))),
-          ),
-          event.on("pointerup", decode.success(ReleasePad(pad.id))),
-          event.on("pointercancel", decode.success(ReleasePad(pad.id))),
-        ],
+  html.div(
+    [
+      attribute.class("pads-grid"),
+      event.on("pointerup", decode.success(ReleaseAllPads)),
+      event.on("pointercancel", decode.success(ReleaseAllPads)),
+    ],
+    {
+      list.map(model.pads, fn(pad) {
+        let is_selected = pad.id == model.selected_pad_id
+        html.button(
+          [
+            attribute.class(
+              "pad-btn"
+              <> case pad.active {
+                True -> " active-pad"
+                False -> ""
+              }
+              <> case is_selected {
+                True -> " selected-pad"
+                False -> ""
+              },
+            ),
+            attribute.attribute("data-pad-id", int.to_string(pad.id)),
+            attribute.style("--pad-color", pad.color),
+            event.prevent_default(
+              event.on("pointerdown", decode.success(TriggerPad(pad.id))),
+            ),
+            event.on("pointerup", decode.success(ReleasePad(pad.id))),
+            event.on("pointercancel", decode.success(ReleasePad(pad.id))),
+          ],
         [
           html.div([attribute.class("pad-top-row")], [
             html.span([attribute.class("pad-voice-tag")], [

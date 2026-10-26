@@ -284,3 +284,22 @@ pub fn control_plane_voice_finished_unlights_non_held_pad_test() {
   let assert Ok(pad0_finished) = list.find(model2.pads, fn(p) { p.id == 0 })
   assert pad0_finished.active == False
 }
+
+pub fn release_all_pads_cleans_up_all_held_and_active_test() {
+  let #(model0, _) = lucy_osko.init(Nil)
+
+  // Trigger Pad 0 and Pad 8 (multi-touch simulation)
+  let #(model1, _) = lucy_osko.update(model0, lucy_osko.TriggerPad(0))
+  let #(model2, _) = lucy_osko.update(model1, lucy_osko.TriggerPad(8))
+  assert list.contains(model2.held_pads, 0)
+  assert list.contains(model2.held_pads, 8)
+
+  // Dispatch ReleaseAllPads (e.g. from pointerup on grid or window)
+  let #(model3, _) = lucy_osko.update(model2, lucy_osko.ReleaseAllPads)
+  assert model3.held_pads == []
+
+  let assert Ok(p0) = list.find(model3.pads, fn(p) { p.id == 0 })
+  let assert Ok(p8) = list.find(model3.pads, fn(p) { p.id == 8 })
+  assert p0.active == False
+  assert p8.active == False
+}
