@@ -166,7 +166,9 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
         float vel = 1.0f;
         json_get_int(arg, "voice", &voice);
         json_get_float(arg, "vel", &vel);
-        skred_trigger_voice(voice, vel);
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "v%d l%.2f", voice, vel);
+        skred_command(cmd);
     } else if (strcmp(action, "trig_p") == 0) {
         int voice = 0;
         float pitch = 440.0f;
@@ -174,11 +176,19 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
         json_get_int(arg, "voice", &voice);
         json_get_float(arg, "pitch", &pitch);
         json_get_float(arg, "vel", &vel);
-        skred_trigger_voice_pitch_velocity(voice, pitch, vel);
+        char cmd[64];
+        if (pitch <= 127.0f) {
+            snprintf(cmd, sizeof(cmd), "v%d n%.1f l%.2f", voice, pitch, vel);
+        } else {
+            snprintf(cmd, sizeof(cmd), "v%d f%.1f l%.2f", voice, pitch, vel);
+        }
+        skred_command(cmd);
     } else if (strcmp(action, "rel") == 0) {
         int voice = 0;
         json_get_int(arg, "voice", &voice);
-        skred_release_voice(voice);
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "v%d l0", voice);
+        skred_command(cmd);
     }
 }
 
@@ -186,11 +196,12 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
 static gboolean on_control_events_drain(gpointer userdata) {
     struct webview *w = (struct webview *)userdata;
     if (!g_running) return G_SOURCE_REMOVE;
-    if (!w || !w->priv.ready || !w->priv.webview) return G_SOURCE_CONTINUE;
 
-    skred_control_event_t events[64];
-    int count = skred_control_event_poll(events, 64);
+    skred_control_event_t events[128];
+    int count = skred_control_event_poll(events, 128);
     if (count <= 0) return G_SOURCE_CONTINUE;
+
+    if (!w || !w->priv.ready || !w->priv.webview) return G_SOURCE_CONTINUE;
 
     size_t buf_cap = (size_t)count * 128 + 32;
     char *json = (char *)malloc(buf_cap);
@@ -228,13 +239,8 @@ static gboolean on_control_events_drain(gpointer userdata) {
 
 // Watch callback for POSIX selectable control-event wait fd
 static gboolean on_control_fd_ready(GIOChannel *source, GIOCondition condition, gpointer data) {
+    (void)source;
     (void)condition;
-    // Consume pipe notify byte if readable
-    if (condition & G_IO_IN) {
-        char buf[64];
-        gsize bytes_read = 0;
-        g_io_channel_read_chars(source, buf, sizeof(buf), &bytes_read, NULL);
-    }
     on_control_events_drain(data);
     return TRUE; // keep watch active
 }
