@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=LUCY+OSKO
+GenericName=Synthesizer & Audio Workstation
+Comment=Single-source Gleam & Lustre audio synthesizer with Skred engine
+Exec=./lucy-osko
+Icon=lucy-osko
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+StartupWMClass=lucy-osko

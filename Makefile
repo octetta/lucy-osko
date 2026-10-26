@@ -89,6 +89,12 @@ linux-package: desktop web
 	@mkdir -p $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)
 	cp $(TARGET) $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/
 	cp -r $(DIST_DIR)/index.html $(DIST_DIR)/app.min.js $(DIST_DIR)/skred_api.* $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/
+	cp packaging/linux/lucy-osko.desktop $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/LUCY+OSKO.desktop 2>/dev/null || true
+	cp packaging/linux/lucy-osko.desktop $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/ 2>/dev/null || true
+	cp packaging/linux/lucy-osko.png $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/ 2>/dev/null || true
+	cp packaging/linux/run.sh $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/ 2>/dev/null || true
+	cp packaging/linux/install-desktop-menu.sh $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/ 2>/dev/null || true
+	chmod +x $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/*.desktop $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/*.sh 2>/dev/null || true
 	cp README.md $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/ 2>/dev/null || true
 	cp LICENSE $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/ 2>/dev/null || true
 	tar -C $(DIST_DIR) -czf $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH).tar.gz $(BIN_NAME)-linux-$(HOST_ARCH)
