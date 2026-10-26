@@ -399,10 +399,28 @@ int main(int argc, char **argv) {
                 char *last_slash = strrchr(exe_path, '/');
                 if (last_slash) {
                     *last_slash = '\0'; // strip binary name
-                    snprintf(candidate, sizeof(candidate), "%s/../dist/index.html", exe_path);
-                    char resolved[PATH_MAX];
-                    if (realpath(candidate, resolved) && access(resolved, R_OK) == 0) {
-                        snprintf(url, sizeof(url), "file://%s", resolved);
+
+                    // 1. Packaged standalone: index.html next to binary
+                    snprintf(candidate, sizeof(candidate), "%s/index.html", exe_path);
+                    if (access(candidate, R_OK) == 0) {
+                        snprintf(url, sizeof(url), "file://%s", candidate);
+                    }
+
+                    // 2. Subdirectory: dist/index.html next to binary
+                    if (!url[0]) {
+                        snprintf(candidate, sizeof(candidate), "%s/dist/index.html", exe_path);
+                        if (access(candidate, R_OK) == 0) {
+                            snprintf(url, sizeof(url), "file://%s", candidate);
+                        }
+                    }
+
+                    // 3. Dev repo build: bin/lucy-osko -> ../dist/index.html
+                    if (!url[0]) {
+                        snprintf(candidate, sizeof(candidate), "%s/../dist/index.html", exe_path);
+                        char resolved[PATH_MAX];
+                        if (realpath(candidate, resolved) && access(resolved, R_OK) == 0) {
+                            snprintf(url, sizeof(url), "file://%s", resolved);
+                        }
                     }
                 }
             }
@@ -413,15 +431,26 @@ int main(int argc, char **argv) {
             char cwd[PATH_MAX];
             if (getcwd(cwd, sizeof(cwd))) {
                 char candidate[PATH_MAX];
-                snprintf(candidate, sizeof(candidate), "%s/dist/index.html", cwd);
+                // Check ./index.html in cwd
+                snprintf(candidate, sizeof(candidate), "%s/index.html", cwd);
                 if (access(candidate, R_OK) == 0) {
                     snprintf(url, sizeof(url), "file://%s", candidate);
+                } else {
+                    // Check ./dist/index.html in cwd
+                    snprintf(candidate, sizeof(candidate), "%s/dist/index.html", cwd);
+                    if (access(candidate, R_OK) == 0) {
+                        snprintf(url, sizeof(url), "file://%s", candidate);
+                    }
                 }
             }
         }
 
         if (!url[0]) {
-            snprintf(url, sizeof(url), "file://dist/index.html");
+            if (access("index.html", R_OK) == 0) {
+                snprintf(url, sizeof(url), "file://index.html");
+            } else {
+                snprintf(url, sizeof(url), "file://dist/index.html");
+            }
         }
     }
     printf("[LUCY+OSKO] Loading UI: %s\n", url);
