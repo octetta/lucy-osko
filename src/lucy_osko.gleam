@@ -3,6 +3,7 @@
 //// featuring configurable 4x4 velocity performance pads, interactive Skode REPL console,
 //// and live Control Plane event inspector.
 
+import gleam/dict
 import gleam/float
 import gleam/int
 import gleam/list
@@ -959,36 +960,25 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     }
 
     OnControlPlaneEvents(events) -> {
-      // Collect triggered and released voices to light up / unlight pads
-      let triggered_voices =
-        list.filter_map(events, fn(item) {
+      // Fold events chronologically so the latest event for each voice determines its active state
+      let voice_states =
+        list.fold(events, dict.new(), fn(acc, item) {
           case item.event {
-            skred.VoiceTrigger(v, _) -> Ok(v)
-            _ -> Error(Nil)
+            skred.VoiceTrigger(v, _) -> dict.insert(acc, v, True)
+            skred.VoiceRelease(v) -> dict.insert(acc, v, False)
+            skred.VoiceFinished(v) -> dict.insert(acc, v, False)
+            _ -> acc
           }
         })
 
-      let released_voices =
-        list.filter_map(events, fn(item) {
-          case item.event {
-            skred.VoiceRelease(v) -> Ok(v)
-            skred.VoiceFinished(v) -> Ok(v)
-            _ -> Error(Nil)
-          }
-        })
-
-      let updated_pads = case triggered_voices, released_voices {
-        [], [] -> model.pads
-        _, _ ->
+      let updated_pads = case dict.is_empty(voice_states) {
+        True -> model.pads
+        False ->
           model.pads
           |> list.map(fn(pad) {
-            case list.contains(triggered_voices, pad.voice) {
-              True -> Pad(..pad, active: True)
-              False ->
-                case list.contains(released_voices, pad.voice) {
-                  True -> Pad(..pad, active: False)
-                  False -> pad
-                }
+            case dict.get(voice_states, pad.voice) {
+              Ok(active_state) -> Pad(..pad, active: active_state)
+              Error(_) -> pad
             }
           })
       }
@@ -1215,7 +1205,9 @@ fn view_pad_grid(model: Model) -> Element(Msg) {
             },
           ),
           attribute.style("--pad-color", pad.color),
-          event.on_click(TriggerPad(pad.id)),
+          event.on_mouse_down(TriggerPad(pad.id)),
+          event.on_mouse_up(ReleasePad(pad.id)),
+          event.on_mouse_leave(ReleasePad(pad.id)),
         ],
         [
           html.div([attribute.class("pad-top-row")], [

@@ -75,6 +75,11 @@ function ensureWasmEngine() {
     }
 
     // 2. Enable voice lifecycle events on voices 0..63
+    if (typeof M._voice_control_events_set === "function") {
+      for (let i = 0; i < 64; i++) {
+        M._voice_control_events_set(i, 1);
+      }
+    }
     for (let i = 0; i < 64; i++) {
       M.ccall("skred_command", null, ["string"], [`v${i} vc1`]);
     }
@@ -150,21 +155,22 @@ function startWasmEventPump(M) {
   eventPumpStarted = true;
 
   function pump() {
-    if (currentSubscription && M && typeof M._skred_control_event_poll === "function" && wasmEventsBuffer && M.HEAPU32) {
+    if (currentSubscription && M && typeof M._skred_control_event_poll === "function" && wasmEventsBuffer && M.HEAPU8) {
       const count = M._skred_control_event_poll(wasmEventsBuffer, MAX_EVENTS_BATCH);
       if (count > 0) {
         const batch = [];
+        const dv = new DataView(M.HEAPU8.buffer, wasmEventsBuffer, count * EVENT_SIZE);
         for (let i = 0; i < count; i++) {
-          const ptr = wasmEventsBuffer + i * EVENT_SIZE;
-          const type = M.HEAPU32[ptr >> 2];
-          const seq = M.HEAPU32[(ptr + 16) >> 2];
-          const voice = M.HEAP32[(ptr + 24) >> 2];
-          const pattern = M.HEAP32[(ptr + 28) >> 2];
-          const step = M.HEAP32[(ptr + 32) >> 2];
-          const id = M.HEAP32[(ptr + 40) >> 2];
-          const val0 = M.HEAPF64[(ptr + 48) >> 3];
-          const val1 = M.HEAPF64[(ptr + 56) >> 3];
-          const val2 = M.HEAPF64[(ptr + 64) >> 3];
+          const off = i * EVENT_SIZE;
+          const type = dv.getUint32(off, true);
+          const seq = dv.getUint32(off + 16, true);
+          const voice = dv.getInt32(off + 24, true);
+          const pattern = dv.getInt32(off + 28, true);
+          const step = dv.getInt32(off + 32, true);
+          const id = dv.getInt32(off + 40, true);
+          const val0 = dv.getFloat64(off + 48, true);
+          const val1 = dv.getFloat64(off + 56, true);
+          const val2 = dv.getFloat64(off + 64, true);
           batch.push({
             t: type,
             seq: seq,
@@ -303,9 +309,6 @@ export function send_trigger(voice, velocity) {
   const M = getWasmModule();
   if (M) {
     ensureWasmEngine();
-    if (typeof M._skred_trigger_voice === "function") {
-      M._skred_trigger_voice(voice, velocity);
-    }
     const cmd = `v${voice} l${velocity.toFixed(2)}`;
     M.ccall("skred_command", null, ["string"], [cmd]);
     return;
@@ -313,6 +316,11 @@ export function send_trigger(voice, velocity) {
 
   console.log("[Skred Host Mock] trig:", voice, velocity);
   simulate_mock_event({ t: 1, seq: mockSeq++, v: voice, p: -1, s: -1, id: 0, vals: [velocity, 0, 0] });
+  if (voice < 8) {
+    setTimeout(() => {
+      simulate_mock_event({ t: 3, seq: mockSeq++, v: voice, p: -1, s: -1, id: 0, vals: [0, 0, 0] });
+    }, 120);
+  }
 }
 
 export function send_trigger_pitch(voice, pitch, velocity) {
@@ -324,9 +332,6 @@ export function send_trigger_pitch(voice, pitch, velocity) {
   const M = getWasmModule();
   if (M) {
     ensureWasmEngine();
-    if (typeof M._skred_trigger_voice_pitch_velocity === "function") {
-      M._skred_trigger_voice_pitch_velocity(voice, pitch, velocity);
-    }
     const cmd = pitch <= 127.0
       ? `v${voice} n${pitch.toFixed(1)} l${velocity.toFixed(2)}`
       : `v${voice} f${pitch.toFixed(1)} l${velocity.toFixed(2)}`;
@@ -336,6 +341,11 @@ export function send_trigger_pitch(voice, pitch, velocity) {
 
   console.log("[Skred Host Mock] trig_pitch:", voice, pitch, velocity);
   simulate_mock_event({ t: 1, seq: mockSeq++, v: voice, p: -1, s: -1, id: 0, vals: [velocity, pitch, 0] });
+  if (voice < 8) {
+    setTimeout(() => {
+      simulate_mock_event({ t: 3, seq: mockSeq++, v: voice, p: -1, s: -1, id: 0, vals: [0, 0, 0] });
+    }, 120);
+  }
 }
 
 export function send_release(voice) {
@@ -347,9 +357,6 @@ export function send_release(voice) {
   const M = getWasmModule();
   if (M) {
     ensureWasmEngine();
-    if (typeof M._skred_release_voice === "function") {
-      M._skred_release_voice(voice);
-    }
     const cmd = `v${voice} l0`;
     M.ccall("skred_command", null, ["string"], [cmd]);
     return;
