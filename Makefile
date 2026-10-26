@@ -1,6 +1,8 @@
 CC ?= gcc
 CFLAGS ?= -O2 -Wall
-MISE ?= mise exec --
+
+# Toolchain runner detection: use mise if available, otherwise direct execution
+MISE ?= $(shell command -v mise >/dev/null 2>&1 && echo "mise exec --")
 
 HOST_DIR = host
 BUILD_DIR = build
@@ -48,10 +50,23 @@ $(SKRED_LIB) $(WASM_ASSETS):
 
 # 1. Compile Gleam frontend and bundle to dist/
 frontend:
-	$(MISE) gleam build --target javascript
-	@mkdir -p $(DIST_DIR)
-	@cp src/entry.mjs build/dev/javascript/lucy_osko/entry.mjs
-	$(MISE) npx --yes esbuild build/dev/javascript/lucy_osko/entry.mjs --bundle --minify --format=iife --outfile=$(DIST_DIR)/app.min.js
+	@if [ -n "$(MISE)" ]; then \
+		$(MISE) gleam build --target javascript && \
+		mkdir -p $(DIST_DIR) && \
+		cp src/entry.mjs build/dev/javascript/lucy_osko/entry.mjs && \
+		$(MISE) npx --yes esbuild build/dev/javascript/lucy_osko/entry.mjs --bundle --minify --format=iife --outfile=$(DIST_DIR)/app.min.js; \
+	elif command -v gleam >/dev/null 2>&1; then \
+		gleam build --target javascript && \
+		mkdir -p $(DIST_DIR) && \
+		cp src/entry.mjs build/dev/javascript/lucy_osko/entry.mjs && \
+		npx --yes esbuild build/dev/javascript/lucy_osko/entry.mjs --bundle --minify --format=iife --outfile=$(DIST_DIR)/app.min.js; \
+	elif [ -f "$(DIST_DIR)/app.min.js" ]; then \
+		echo "Notice: Using pre-built $(DIST_DIR)/app.min.js (neither mise nor gleam found)"; \
+	else \
+		echo "Error: Neither mise nor gleam found, and $(DIST_DIR)/app.min.js does not exist." >&2; \
+		echo "Please install mise (https://mise.jdx.dev) or gleam." >&2; \
+		exit 1; \
+	fi
 
 # 2. Compile native C webview host (Desktop target)
 desktop: frontend host
@@ -74,7 +89,8 @@ linux-package: desktop web
 	@mkdir -p $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)
 	cp $(TARGET) $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/
 	cp -r $(DIST_DIR)/index.html $(DIST_DIR)/app.min.js $(DIST_DIR)/skred_api.* $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/
-	cp README.md LICENSE 2>/dev/null || true
+	cp README.md $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/ 2>/dev/null || true
+	cp LICENSE $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH)/ 2>/dev/null || true
 	tar -C $(DIST_DIR) -czf $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH).tar.gz $(BIN_NAME)-linux-$(HOST_ARCH)
 	@echo "Created $(DIST_DIR)/$(BIN_NAME)-linux-$(HOST_ARCH).tar.gz"
 
@@ -123,7 +139,13 @@ serve: web
 	python3 scripts/serve.py 8080 $(DIST_DIR)
 
 format:
-	$(MISE) gleam format
+	@if [ -n "$(MISE)" ]; then \
+		$(MISE) gleam format; \
+	elif command -v gleam >/dev/null 2>&1; then \
+		gleam format; \
+	else \
+		echo "Error: neither mise nor gleam found" >&2; exit 1; \
+	fi
 
 clean:
 	rm -rf $(BIN_DIR) $(BUILD_DIR) $(DIST_DIR)/app.min.js $(DIST_DIR)/*.tar.gz $(DIST_DIR)/*.zip $(DIST_DIR)/$(BIN_NAME)-linux-*

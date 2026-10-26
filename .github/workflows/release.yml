@@ -29,11 +29,7 @@ jobs:
         uses: jdx/mise-action@v2
 
       - name: Build frontend bundle
-        run: |
-          mise exec -- gleam build --target javascript
-          mkdir -p dist
-          cp src/entry.mjs build/dev/javascript/lucy_osko/entry.mjs
-          mise exec -- npx --yes esbuild build/dev/javascript/lucy_osko/entry.mjs --bundle --minify --format=iife --outfile=dist/app.min.js
+        run: make frontend
 
       - name: Run Gleam tests
         run: mise exec -- gleam test
@@ -73,6 +69,12 @@ jobs:
         with:
           name: frontend-dist
           path: dist
+
+      - name: Verify frontend bundle
+        run: |
+          ls -la dist/
+          test -f dist/app.min.js
+          test -f dist/index.html
 
       - name: Resolve Skred version
         id: ver
