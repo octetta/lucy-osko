@@ -53,19 +53,12 @@ pub type ControlEventInfo {
 
 /// A decoded control plane event pairing high-level domain event with raw inspection data
 pub type ControlPlaneEvent {
-  ControlPlaneEvent(
-    event: SkredEvent,
-    info: ControlEventInfo,
-  )
+  ControlPlaneEvent(event: SkredEvent, info: ControlEventInfo)
 }
 
 /// Result of evaluating an ASCII Skode/Skred command on the engine
 pub type CommandResult {
-  CommandResult(
-    cmd: String,
-    ret: Int,
-    response: String,
-  )
+  CommandResult(cmd: String, ret: Int, response: String)
 }
 
 // Internal raw JSON event format received from the C host
@@ -170,7 +163,9 @@ pub fn decoder() -> decode.Decoder(List(SkredEvent)) {
 }
 
 /// Decodes a raw dynamic JSON array of events into high-level SkredEvents.
-pub fn decode_events(dynamic_array: Dynamic) -> Result(List(SkredEvent), List(decode.DecodeError)) {
+pub fn decode_events(
+  dynamic_array: Dynamic,
+) -> Result(List(SkredEvent), List(decode.DecodeError)) {
   decode.run(dynamic_array, decoder())
 }
 
@@ -188,12 +183,16 @@ pub fn control_plane_decoder() -> decode.Decoder(List(ControlPlaneEvent)) {
 }
 
 /// Decodes a dynamic array into a list of ControlPlaneEvents.
-pub fn decode_control_plane_events(dynamic_array: Dynamic) -> Result(List(ControlPlaneEvent), List(decode.DecodeError)) {
+pub fn decode_control_plane_events(
+  dynamic_array: Dynamic,
+) -> Result(List(ControlPlaneEvent), List(decode.DecodeError)) {
   decode.run(dynamic_array, control_plane_decoder())
 }
 
 /// Subscribes to the C host's 60Hz batched event stream with full control plane diagnostics.
-pub fn subscribe_control_plane(on_batch: fn(List(ControlPlaneEvent)) -> msg) -> Effect(msg) {
+pub fn subscribe_control_plane(
+  on_batch: fn(List(ControlPlaneEvent)) -> msg,
+) -> Effect(msg) {
   effect.from(fn(dispatch) {
     ffi_subscribe_events(fn(dynamic_array) {
       case decode_control_plane_events(dynamic_array) {
@@ -226,7 +225,9 @@ fn command_result_decoder() -> decode.Decoder(CommandResult) {
 }
 
 /// Subscribes to responses from interactive command evaluations.
-pub fn subscribe_command_responses(on_response: fn(CommandResult) -> msg) -> Effect(msg) {
+pub fn subscribe_command_responses(
+  on_response: fn(CommandResult) -> msg,
+) -> Effect(msg) {
   effect.from(fn(dispatch) {
     ffi_subscribe_command_responses(fn(dynamic_obj) {
       case decode.run(dynamic_obj, command_result_decoder()) {
@@ -323,7 +324,9 @@ pub fn set_volume(voice: Int, volume: Float) -> Effect(msg) {
 fn ffi_subscribe_events(on_batch: fn(Dynamic) -> Nil) -> fn() -> Nil
 
 @external(javascript, "./skred_ffi.mjs", "subscribe_command_responses")
-fn ffi_subscribe_command_responses(on_response: fn(Dynamic) -> Nil) -> fn() -> Nil
+fn ffi_subscribe_command_responses(
+  on_response: fn(Dynamic) -> Nil,
+) -> fn() -> Nil
 
 @external(javascript, "./skred_ffi.mjs", "send_command")
 fn ffi_send_command(cmd: String) -> Nil

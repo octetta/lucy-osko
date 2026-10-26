@@ -1,5 +1,7 @@
 // JavaScript FFI bridge connecting Gleam & Lustre to the native C webview host (and skred audio engine)
 
+const win = typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : {});
+
 let currentSubscription = null;
 let commandResponseSubscription = null;
 
@@ -7,18 +9,18 @@ function invokeNative(action, payload) {
   const obj = Object.assign({ action: action }, payload);
   const jsonStr = JSON.stringify(obj);
   
-  if (window.external && typeof window.external.invoke === "function") {
+  if (win.external && typeof win.external.invoke === "function") {
     try {
-      window.external.invoke(jsonStr);
+      win.external.invoke(jsonStr);
       return true;
     } catch (e) {
       console.warn("window.external.invoke failed:", e);
     }
   }
   
-  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.external) {
+  if (win.webkit && win.webkit.messageHandlers && win.webkit.messageHandlers.external) {
     try {
-      window.webkit.messageHandlers.external.postMessage(jsonStr);
+      win.webkit.messageHandlers.external.postMessage(jsonStr);
       return true;
     } catch (e) {
       console.warn("window.webkit.messageHandlers.external.postMessage failed:", e);
@@ -32,7 +34,7 @@ export function subscribe_events(on_batch) {
   currentSubscription = on_batch;
   
   // Register global receiver for C host batches
-  window.__skred_dispatch_batch = function(batch) {
+  win.__skred_dispatch_batch = function(batch) {
     if (currentSubscription) {
       try {
         const events = (typeof batch === 'string') ? JSON.parse(batch) : batch;
@@ -45,14 +47,14 @@ export function subscribe_events(on_batch) {
 
   return function() {
     currentSubscription = null;
-    delete window.__skred_dispatch_batch;
+    delete win.__skred_dispatch_batch;
   };
 }
 
 export function subscribe_command_responses(on_response) {
   commandResponseSubscription = on_response;
 
-  window.__skred_on_command_response = function(resp) {
+  win.__skred_on_command_response = function(resp) {
     if (commandResponseSubscription) {
       try {
         const data = (typeof resp === 'string') ? JSON.parse(resp) : resp;
@@ -65,7 +67,7 @@ export function subscribe_command_responses(on_response) {
 
   return function() {
     commandResponseSubscription = null;
-    delete window.__skred_on_command_response;
+    delete win.__skred_on_command_response;
   };
 }
 
