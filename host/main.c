@@ -14,7 +14,6 @@
 
 static volatile int g_running = 1;
 static struct webview g_webview;
-static pthread_t g_event_thread;
 
 // Helper to extract a string field from simple JSON: {"action":"cmd","text":"..."}
 static int json_get_string(const char *json, const char *key, char *out, size_t out_size) {
@@ -124,25 +123,6 @@ static void on_dispatch_cmd_response(struct webview *w, void *arg) {
     }
 }
 
-// Dispatched to GTK main loop thread for event batch (non-blocking async)
-static void on_dispatch_batch(struct webview *w, void *arg) {
-    char *json = (char *)arg;
-    if (json) {
-        char *script = NULL;
-        if (asprintf(&script, "window.__skred_dispatch_batch && window.__skred_dispatch_batch(%s);", json) != -1) {
-            if (w && w->priv.webview) {
-#if WEBKIT_CHECK_VERSION(2, 40, 0)
-                webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, -1, NULL, NULL, NULL, NULL, NULL);
-#else
-                webkit_web_view_run_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, NULL, NULL, NULL);
-#endif
-            }
-            free(script);
-        }
-        free(json);
-    }
-}
-
 // JS -> C Callback
 static void on_webview_invoke(struct webview *w, const char *arg) {
     if (!arg || !*arg) return;
@@ -186,9 +166,7 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
         float vel = 1.0f;
         json_get_int(arg, "voice", &voice);
         json_get_float(arg, "vel", &vel);
-        char cmd[64];
-        snprintf(cmd, sizeof(cmd), "v%d l%.2f", voice, vel);
-        skred_command(cmd);
+        skred_trigger_voice(voice, vel);
     } else if (strcmp(action, "trig_p") == 0) {
         int voice = 0;
         float pitch = 440.0f;
@@ -196,64 +174,69 @@ static void on_webview_invoke(struct webview *w, const char *arg) {
         json_get_int(arg, "voice", &voice);
         json_get_float(arg, "pitch", &pitch);
         json_get_float(arg, "vel", &vel);
-        char cmd[64];
-        if (pitch <= 127.0f) {
-            snprintf(cmd, sizeof(cmd), "v%d n%.1f l%.2f", voice, pitch, vel);
-        } else {
-            snprintf(cmd, sizeof(cmd), "v%d f%.1f l%.2f", voice, pitch, vel);
-        }
-        skred_command(cmd);
+        skred_trigger_voice_pitch_velocity(voice, pitch, vel);
     } else if (strcmp(action, "rel") == 0) {
         int voice = 0;
         json_get_int(arg, "voice", &voice);
-        char cmd[64];
-        snprintf(cmd, sizeof(cmd), "v%d l0", voice);
-        skred_command(cmd);
+        skred_release_voice(voice);
     }
 }
 
-// Background thread polling Skred's control event ring buffer at 60 Hz
-static void *event_pump_thread(void *userdata) {
+// Non-blocking control plane event drain directly on the GTK main loop
+static gboolean on_control_events_drain(gpointer userdata) {
     struct webview *w = (struct webview *)userdata;
+    if (!g_running) return G_SOURCE_REMOVE;
+    if (!w || !w->priv.ready || !w->priv.webview) return G_SOURCE_CONTINUE;
+
     skred_control_event_t events[64];
+    int count = skred_control_event_poll(events, 64);
+    if (count <= 0) return G_SOURCE_CONTINUE;
 
-    while (g_running) {
-        // Wait up to 16ms for events (yielding CPU if idle)
-        int wait_res = skred_control_event_wait(16);
-        if (!g_running) break;
-        if (wait_res <= 0) continue;
+    size_t buf_cap = (size_t)count * 128 + 32;
+    char *json = (char *)malloc(buf_cap);
+    if (!json) return G_SOURCE_CONTINUE;
 
-        int count = skred_control_event_poll(events, 64);
-        if (count <= 0) continue;
+    size_t offset = 0;
+    json[offset++] = '[';
 
-        // Serialize event batch to JSON
-        // Example: [{"t":1,"v":0,"p":-1,"s":-1,"id":0,"vals":[0.8,0.0,0.0]}, ...]
-        size_t buf_cap = (size_t)count * 128 + 32;
-        char *json = (char *)malloc(buf_cap);
-        if (!json) continue;
-
-        size_t offset = 0;
-        json[offset++] = '[';
-
-        for (int i = 0; i < count; i++) {
-            skred_control_event_t *e = &events[i];
-            int written = snprintf(json + offset, buf_cap - offset,
-                "%s{\"t\":%u,\"seq\":%llu,\"v\":%d,\"p\":%d,\"s\":%d,\"id\":%d,\"vals\":[%.4f,%.4f,%.4f]}",
-                (i > 0) ? "," : "",
-                e->type, (unsigned long long)e->sequence, e->voice, e->pattern, e->step, e->id,
-                e->value[0], e->value[1], e->value[2]);
-            if (written > 0 && (size_t)written < buf_cap - offset) {
-                offset += (size_t)written;
-            }
+    for (int i = 0; i < count; i++) {
+        skred_control_event_t *e = &events[i];
+        int written = snprintf(json + offset, buf_cap - offset,
+            "%s{\"t\":%u,\"seq\":%llu,\"v\":%d,\"p\":%d,\"s\":%d,\"id\":%d,\"vals\":[%.4f,%.4f,%.4f]}",
+            (i > 0) ? "," : "",
+            e->type, (unsigned long long)e->sequence, e->voice, e->pattern, e->step, e->id,
+            e->value[0], e->value[1], e->value[2]);
+        if (written > 0 && (size_t)written < buf_cap - offset) {
+            offset += (size_t)written;
         }
-        json[offset++] = ']';
-        json[offset] = '\0';
-
-        // Deliver batch to webview on the GTK thread
-        webview_dispatch(w, on_dispatch_batch, json);
     }
+    json[offset++] = ']';
+    json[offset] = '\0';
 
-    return NULL;
+    char *script = NULL;
+    if (asprintf(&script, "window.__skred_dispatch_batch && window.__skred_dispatch_batch(%s);", json) != -1) {
+#if WEBKIT_CHECK_VERSION(2, 40, 0)
+        webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, -1, NULL, NULL, NULL, NULL, NULL);
+#else
+        webkit_web_view_run_javascript(WEBKIT_WEB_VIEW(w->priv.webview), script, NULL, NULL, NULL);
+#endif
+        free(script);
+    }
+    free(json);
+    return G_SOURCE_CONTINUE;
+}
+
+// Watch callback for POSIX selectable control-event wait fd
+static gboolean on_control_fd_ready(GIOChannel *source, GIOCondition condition, gpointer data) {
+    (void)condition;
+    // Consume pipe notify byte if readable
+    if (condition & G_IO_IN) {
+        char buf[64];
+        gsize bytes_read = 0;
+        g_io_channel_read_chars(source, buf, sizeof(buf), &bytes_read, NULL);
+    }
+    on_control_events_drain(data);
+    return TRUE; // keep watch active
 }
 
 static int on_webview_close(struct webview *w) {
@@ -383,10 +366,17 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Start background event pump thread
-    if (pthread_create(&g_event_thread, NULL, event_pump_thread, &g_webview) != 0) {
-        fprintf(stderr, "Failed to create event pump thread!\n");
+    // Native non-blocking control plane integration with GTK/GLib event loop
+    int ce_fd = skred_control_event_wait_fd();
+    if (ce_fd >= 0) {
+        GIOChannel *chan = g_io_channel_unix_new(ce_fd);
+        g_io_channel_set_encoding(chan, NULL, NULL);
+        g_io_channel_set_buffered(chan, FALSE);
+        g_io_add_watch(chan, G_IO_IN | G_IO_PRI, on_control_fd_ready, &g_webview);
+        g_io_channel_unref(chan);
     }
+    // High-resolution non-blocking 16ms poll timer on the GTK main loop
+    g_timeout_add(16, on_control_events_drain, &g_webview);
 
     // Run webview event loop until window is closed
     while (g_running && webview_loop(&g_webview, 1) == 0) {
@@ -394,7 +384,6 @@ int main(int argc, char **argv) {
 
     printf("[Lucy Osko] Shutting down...\n");
     g_running = 0;
-    pthread_join(g_event_thread, NULL);
     skred_stop();
     webview_exit(&g_webview);
 
